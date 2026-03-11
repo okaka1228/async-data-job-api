@@ -1,0 +1,19 @@
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - typecheck
+    - bodyclose
+    - gocritic
+
+linters-settings:
+  govet:
+    shadow: true
+
+issues:
+  exclude-dirs:
+    - vendor

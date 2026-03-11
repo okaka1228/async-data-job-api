@@ -1,0 +1,244 @@
+openapi: "3.1.0"
+info:
+  title: Async Data Job API
+  description: 大規模 JSON/NDJSON 処理ジョブ基盤 API
+  version: "1.0.0"
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      operationId: healthz
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/jobs:
+    post:
+      summary: Create a new job
+      operationId: createJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "202":
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "200":
+          description: Idempotent — existing job returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      summary: List jobs
+      operationId: listJobs
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, succeeded, failed, canceled]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Job"
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+
+  /api/v1/jobs/{id}:
+    get:
+      summary: Get job details
+      operationId: getJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          description: Not found
+
+  /api/v1/jobs/{id}/cancel:
+    post:
+      summary: Cancel a job
+      operationId: cancelJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Job canceled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          description: Not found
+        "409":
+          description: Job cannot be canceled
+
+  /api/v1/jobs/{id}/failures:
+    get:
+      summary: List DLQ failure entries for a job
+      operationId: getJobFailures
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  failures:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FailedJobEntry"
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      operationId: getMetrics
+      responses:
+        "200":
+          description: Prometheus text format
+
+components:
+  schemas:
+    CreateJobRequest:
+      type: object
+      required: [input_url]
+      properties:
+        input_url:
+          type: string
+          maxLength: 2048
+          example: "https://example.com/data.ndjson"
+        idempotency_key:
+          type: string
+          maxLength: 255
+          example: "import-2024-01"
+        max_retries:
+          type: integer
+          minimum: 0
+          default: 3
+
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        idempotency_key:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, canceled]
+        input_url:
+          type: string
+        total_rows:
+          type: integer
+        processed_rows:
+          type: integer
+        retries:
+          type: integer
+        max_retries:
+          type: integer
+        error_message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    FailedJobEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        job_id:
+          type: string
+          format: uuid
+        error_message:
+          type: string
+        attempt:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: string

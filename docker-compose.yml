@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jobapi
+      POSTGRES_PASSWORD: jobapi
+      POSTGRES_DB: jobapi
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobapi"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    image: migrate/migrate:v4.17.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    command: >
+      -path=/migrations
+      -database=postgres://jobapi:jobapi@postgres:5432/jobapi?sslmode=disable
+      up
+    restart: on-failure
+
+  app:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://jobapi:jobapi@postgres:5432/jobapi?sslmode=disable
+      SERVER_PORT: "8080"
+      WORKER_CONCURRENCY: "4"
+      WORKER_TIMEOUT_SEC: "300"
+      WORKER_MAX_RETRIES: "3"
+      LOG_LEVEL: debug
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+
+  seed:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://jobapi:jobapi@postgres:5432/jobapi?sslmode=disable
+    entrypoint: ["server", "-seed"]
+    profiles:
+      - seed
+    restart: "no"
+
+volumes:
+  pgdata:
