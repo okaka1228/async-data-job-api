@@ -13,6 +13,7 @@ type Config struct {
 	WorkerTimeout     time.Duration
 	WorkerMaxRetries  int
 	LogLevel          string
+	OTELEndpoint      string
 }
 
 func Load() *Config {
@@ -23,6 +24,7 @@ func Load() *Config {
 		WorkerTimeout:     time.Duration(getEnvInt("WORKER_TIMEOUT_SEC", 300)) * time.Second,
 		WorkerMaxRetries:  getEnvInt("WORKER_MAX_RETRIES", 3),
 		LogLevel:          getEnv("LOG_LEVEL", "info"),
+		OTELEndpoint:      getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 	}
 }
 

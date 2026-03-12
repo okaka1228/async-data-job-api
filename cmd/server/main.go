@@ -76,7 +76,7 @@ func main() {
 
 	// Observability
 	metrics := observability.NewMetrics()
-	shutdownTracer, err := observability.InitTracer("async-data-job-api", logger)
+	shutdownTracer, err := observability.InitTracer("async-data-job-api", cfg.OTELEndpoint, logger)
 	if err != nil {
 		logger.Error("failed to init tracer", "error", err)
 		os.Exit(1)
