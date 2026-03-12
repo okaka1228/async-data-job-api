@@ -70,3 +70,14 @@ func TestChannelQueue_DoubleClose(t *testing.T) {
 	q.Close()
 	q.Close() // should not panic
 }
+
+func TestNewChannelQueue_InvalidBufSize(t *testing.T) {
+	q := NewChannelQueue(0)
+	defer q.Close()
+
+	// Should default to 100
+	cap := cap(q.ch)
+	if cap != 100 {
+		t.Errorf("expected default buffer 100, got %d", cap)
+	}
+}

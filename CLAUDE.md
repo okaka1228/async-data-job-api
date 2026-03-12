@@ -32,6 +32,9 @@ go test -v -race -count=1 ./...
 # 統合テスト（PostgreSQL 必要）
 go test -v -race -count=1 -tags=integration ./...
 
+# テストカバレッジの出力 (coverage.out / coverage.html)
+make test-coverage
+
 # lint
 make lint
 

@@ -200,11 +200,12 @@ func (r *jobRepo) ListFailedEntries(ctx context.Context, jobID uuid.UUID) ([]dom
 }
 
 func (r *jobRepo) FetchPendingJobs(ctx context.Context, limit int) ([]domain.Job, error) {
+	// Only fetch pending jobs that haven't been updated in the last 5 minutes (assumed stuck)
 	query := `
 		SELECT id, idempotency_key, status, input_url, total_rows, processed_rows,
 		       retries, max_retries, error_message, created_at, updated_at, completed_at
 		FROM jobs
-		WHERE status = 'pending'
+		WHERE status = 'pending' AND updated_at < NOW() - INTERVAL '5 minutes'
 		ORDER BY created_at ASC
 		LIMIT $1
 	`

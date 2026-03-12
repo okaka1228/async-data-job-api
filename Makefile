@@ -1,4 +1,4 @@
-.PHONY: all build test lint up down migrate seed clean fmt
+.PHONY: all build test test-integration test-coverage lint up down migrate seed clean fmt
 
 all: lint test build
 
@@ -13,6 +13,12 @@ test:
 
 test-integration:
 	go test -v -race -count=1 -tags=integration ./...
+
+test-coverage:
+	go test -coverprofile=coverage.out -tags=integration ./...
+	go tool cover -func=coverage.out
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report saved to coverage.html"
 
 lint:
 	golangci-lint run ./...

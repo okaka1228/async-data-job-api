@@ -1,20 +1,30 @@
+version: "2"
+
 linters:
   enable:
-    - errcheck
-    - gosimple
-    - govet
-    - staticcheck
-    - unused
-    - ineffassign
-    - typecheck
     - bodyclose
     - gocritic
+  settings:
+    govet:
+      enable:
+        - shadow
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - vendor
+      - third_party$
+      - builtin$
+      - examples$
 
-linters-settings:
-  govet:
-    enable:
-      - shadow
-
-issues:
-  exclude-dirs:
-    - vendor
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
