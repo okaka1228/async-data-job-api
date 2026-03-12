@@ -18,7 +18,7 @@
 - **Observability**: OpenTelemetry (tracing) + Prometheus (metrics) + slog (structured logging)
 - **Container**: Docker Compose
 - **CI**: GitHub Actions
-- **Lint**: golangci-lint
+- **Lint**: golangci-lint v2
 
 ## よく使うコマンド
 
@@ -50,6 +50,23 @@ make down
 # ログ表示
 make logs
 ```
+
+## Push 前チェック
+
+```bash
+# lint + test を必ず通してからpushする
+make lint
+go test -timeout 30s ./internal/...
+```
+
+## テストカバレッジ
+
+現在 **84.6%**（`cmd/` と DB 接続の `repository/` 除く）。
+
+- `internal/config`, `domain`, `queue` → **100%**
+- `internal/api` → **85.8%**
+- `internal/worker` → **80.5%**
+- `repository/` は統合テスト（`-tags=integration`）でカバー
 
 ## ディレクトリ構成
 
