@@ -118,7 +118,7 @@
 
 - **ユニットテスト**: モックリポジトリを使用し、API ハンドラー・ワーカープロセッサ・キュー・ドメインロジックを網羅的にテスト（カバレッジ **84.5%**）
 - **統合テスト**: `//go:build integration` タグで分離し、実 PostgreSQL に対してリポジトリ層のCRUD操作を検証
-- **CI**: GitHub Actions で lint（golangci-lint v2）+ ユニットテスト + 統合テスト + Docker ビルドを自動実行
+- **CI**: GitHub Actions で変更種別を自動検出し、ソース変更時は lint（golangci-lint）→ test（unit + integration）→ build の順で実行。`ci-gate` ジョブが単一の必須ステータスチェックとして機能し、ドキュメントのみの変更は即座に通過する
 - **注意**: `FetchPendingJobs` には5分間のグレースピリオドフィルタを設けており、新規作成直後のジョブがポーラーに重複取得されないようにしています
 
 ---
