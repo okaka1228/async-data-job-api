@@ -10,11 +10,10 @@ linters:
     - ineffassign
     - bodyclose
     - gocritic
+  settings:
+    govet:
+      enable:
+        - shadow
   exclusions:
     paths:
       - vendor
-
-settings:
-  govet:
-    enable:
-      - shadow
