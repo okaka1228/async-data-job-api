@@ -52,7 +52,7 @@ jobs:
 
       - name: Run migrations
         run: |
-          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1
           migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jobapi?sslmode=disable" up
 
       - name: Unit tests
