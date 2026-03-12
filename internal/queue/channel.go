@@ -15,7 +15,6 @@ type Queue interface {
 // ChannelQueue is an in-memory, channel-based queue.
 type ChannelQueue struct {
 	ch     chan string
-	once   sync.Once
 	closed bool
 	mu     sync.Mutex
 }
@@ -49,10 +48,11 @@ func (q *ChannelQueue) Dequeue(_ context.Context) <-chan string {
 }
 
 func (q *ChannelQueue) Close() {
-	q.once.Do(func() {
-		q.mu.Lock()
-		q.closed = true
-		q.mu.Unlock()
-		close(q.ch)
-	})
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	q.closed = true
+	close(q.ch)
 }

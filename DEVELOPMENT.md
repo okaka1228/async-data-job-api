@@ -52,7 +52,7 @@ DATABASE_URL="postgres://jobapi:jobapi@localhost:5432/jobapi?sslmode=disable" ma
 ## テストの実行
 
 テストは「依存関係なしで動くUnit Test」と「実DBを必要とするIntegration Test」に分かれています。
-現在のテストカバレッジは **84.6%** です（`cmd/` と `repository/` DB接続部分を除く）。
+現在のテストカバレッジは **84.5%** です（`cmd/` と `repository/` DB接続部分を除く）。
 
 ### Unit Test (DB不要)
 
@@ -83,6 +83,28 @@ make test-integration
 # カバレッジレポートを生成（coverage.html）
 make test-coverage
 ```
+
+### ベンチマーク
+
+`internal/worker/processor_bench_test.go` に 1GB ファイル処理のベンチマークがあります。
+
+```bash
+# 1GB NDJSON / JSON array の処理時間計測（HTTP サーバー経由）
+go test -run '^$' \
+  -bench 'BenchmarkProcess.*_1GB' \
+  -benchtime=1x -count=1 -timeout=600s \
+  ./internal/worker/
+
+# 100MB で素早く確認したい場合
+go test -run '^$' -bench 'BenchmarkProcess.*_100MB' -benchtime=1x ./internal/worker/
+```
+
+**計測結果（Intel Core Ultra 7 265 / 4コア）**
+
+| フォーマット | 処理時間 | スループット | 行数 |
+|------------|---------|------------|------|
+| NDJSON（HTTP） | 約 2.2 秒 | 487 MB/s | ~14M |
+| JSON array（HTTP） | 約 4.4 秒 | 242 MB/s | ~14M |
 
 ---
 
@@ -128,6 +150,40 @@ migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jo
 
 ---
 
+## 負荷試験
+
+[hey](https://github.com/rakyll/hey) を使って API エンドポイントの負荷試験ができます。
+
+```bash
+go install github.com/rakyll/hey@latest
+
+# スループット計測（30秒間、50並列）
+hey -z 30s -c 50 http://localhost:8080/healthz
+
+# リクエスト数指定
+hey -n 500 -c 50 http://localhost:8080/api/v1/jobs
+hey -n 500 -c 50 http://localhost:8080/api/v1/jobs/<id>
+
+# POST（ジョブ作成）
+hey -n 300 -c 30 \
+  -m POST -H 'Content-Type: application/json' \
+  -d '{"input_url":"http://example.com/data.ndjson"}' \
+  http://localhost:8080/api/v1/jobs
+```
+
+**計測結果（Intel Core Ultra 7 265 / 4コア / 50並列）**
+
+| エンドポイント | RPS | p50 | p95 | p99 |
+|--------------|-----|-----|-----|-----|
+| `GET /healthz` | ~24,800 | 0.7ms | 24ms | 43ms |
+| `GET /api/v1/jobs` | ~5,000 | 8ms | 53ms | 98ms |
+| `GET /api/v1/jobs/{id}` | ~9,000 | 4ms | 27ms | 40ms |
+| `POST /api/v1/jobs` | ~6,000 | 7ms | 29ms | 38ms |
+
+全テストでエラーレート 0%。
+
+---
+
 ## Git ワークフロー
 
 - **main ブランチへの直接 push は禁止です。** 必ず別ブランチを切って PR を作成してください。
@@ -150,3 +206,12 @@ migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jo
 1. **ドメインモデルの追加**: 読み込んだ1行のデータをデコードする為の構造体を定義する。
 2. **Processorの書き換え**: `internal/worker/processor.go` 内の `processNDJSON` または `processJSON` で、`json.Valid(line)` による検証を行っている部分を `json.Unmarshal` に差し替え、ビジネスロジックを呼ぶように変更する。
 3. **リポジトリの拡張**: DB保存が必要な場合は `internal/repository` に処理を追加して登録する。
+
+### 3. `JobRepository` インターフェースにメソッドを追加する場合
+
+インターフェース（`internal/repository/job_repo.go`）にメソッドを追加した場合、以下のモックも必ず更新してください。
+
+| ファイル | 用途 |
+|---------|------|
+| `internal/api/handler_job_test.go` | API ハンドラのユニットテスト用モック |
+| `internal/worker/processor_test.go` | Worker/Poller のユニットテスト用モック |

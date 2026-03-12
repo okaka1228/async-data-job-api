@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/femto/async-data-job-api/internal/domain"
@@ -20,6 +21,13 @@ import (
 )
 
 var tracer = otel.Tracer("worker")
+
+// scannerBufPool reuses 1MB scanner buffers across concurrent workers.
+var scannerBufPool = sync.Pool{
+	New: func() any { return make([]byte, 0, 1024*1024) },
+}
+
+const contextCheckInterval = 1000
 
 // Processor handles the actual data processing for a job.
 type Processor struct {
@@ -45,7 +53,14 @@ func NewProcessor(
 		logger:     logger,
 		timeout:    timeout,
 		maxRetries: maxRetries,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        16,
+				MaxIdleConnsPerHost: 16,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 	}
 }
 
@@ -145,21 +160,18 @@ func (p *Processor) processData(ctx context.Context, job *domain.Job, logger *sl
 }
 
 func (p *Processor) processNDJSON(ctx context.Context, job *domain.Job, r io.Reader, logger *slog.Logger) error {
+	buf := scannerBufPool.Get().([]byte)
+	defer scannerBufPool.Put(buf[:0])
+
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 10MB max line
+	scanner.Buffer(buf, 10*1024*1024) // 10MB max line
 	var processed int64
-	
+
 	const batchSize = 5000
 	metricsBatch := 0
 	lastUpdate := time.Now()
 
 	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("processing timeout: %w", ctx.Err())
-		default:
-		}
-
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -171,6 +183,14 @@ func (p *Processor) processNDJSON(ctx context.Context, job *domain.Job, r io.Rea
 		}
 		processed++
 		metricsBatch++
+
+		if processed%contextCheckInterval == 0 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("processing timeout: %w", ctx.Err())
+			default:
+			}
+		}
 
 		// Periodic metrics update
 		if metricsBatch >= batchSize {
@@ -228,12 +248,6 @@ func (p *Processor) processJSON(ctx context.Context, job *domain.Job, r io.Reade
 	lastUpdate := time.Now()
 	
 	for decoder.More() {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("processing timeout: %w", ctx.Err())
-		default:
-		}
-
 		// Decode into empty struct to validate without allocating memory for fields
 		var dummy struct{}
 		if err := decoder.Decode(&dummy); err != nil {
@@ -241,6 +255,14 @@ func (p *Processor) processJSON(ctx context.Context, job *domain.Job, r io.Reade
 		}
 		processed++
 		metricsBatch++
+
+		if processed%contextCheckInterval == 0 {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("processing timeout: %w", ctx.Err())
+			default:
+			}
+		}
 
 		if metricsBatch >= batchSize {
 			p.metrics.RowsProcessed.Add(float64(metricsBatch))

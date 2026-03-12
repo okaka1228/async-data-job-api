@@ -23,6 +23,12 @@ type JobRepository interface {
 	InsertFailedEntry(ctx context.Context, entry *domain.FailedJobEntry) error
 	ListFailedEntries(ctx context.Context, jobID uuid.UUID) ([]domain.FailedJobEntry, error)
 	FetchPendingJobs(ctx context.Context, limit int) ([]domain.Job, error)
+	// CancelJob atomically cancels a pending/running job in a single query.
+	// Returns the updated job, or nil if not found or already in a terminal state.
+	CancelJob(ctx context.Context, id uuid.UUID) (*domain.Job, error)
+	// TouchJob refreshes updated_at without changing any other field.
+	// Used by the poller to prevent a re-enqueued job from being picked up again immediately.
+	TouchJob(ctx context.Context, id uuid.UUID) error
 }
 
 type jobRepo struct {
@@ -111,7 +117,7 @@ func (r *jobRepo) List(ctx context.Context, params domain.ListJobsParams) ([]dom
 	}
 	defer rows.Close()
 
-	var jobs []domain.Job
+	jobs := make([]domain.Job, 0, params.Limit)
 	for rows.Next() {
 		j, err := scanJobFromRows(rows)
 		if err != nil {
@@ -188,7 +194,7 @@ func (r *jobRepo) ListFailedEntries(ctx context.Context, jobID uuid.UUID) ([]dom
 	}
 	defer rows.Close()
 
-	var entries []domain.FailedJobEntry
+	entries := make([]domain.FailedJobEntry, 0, 8)
 	for rows.Next() {
 		var e domain.FailedJobEntry
 		if err := rows.Scan(&e.ID, &e.JobID, &e.ErrorMessage, &e.Attempt, &e.CreatedAt); err != nil {
@@ -215,7 +221,7 @@ func (r *jobRepo) FetchPendingJobs(ctx context.Context, limit int) ([]domain.Job
 	}
 	defer rows.Close()
 
-	var jobs []domain.Job
+	jobs := make([]domain.Job, 0, limit)
 	for rows.Next() {
 		j, err := scanJobFromRows(rows)
 		if err != nil {
@@ -224,6 +230,26 @@ func (r *jobRepo) FetchPendingJobs(ctx context.Context, limit int) ([]domain.Job
 		jobs = append(jobs, *j)
 	}
 	return jobs, rows.Err()
+}
+
+// CancelJob atomically cancels a job if it is in a cancelable state (pending/running).
+// Returns the updated job on success, or nil if the job was not found or not cancelable.
+func (r *jobRepo) CancelJob(ctx context.Context, id uuid.UUID) (*domain.Job, error) {
+	query := `
+		UPDATE jobs
+		SET status = 'canceled', error_message = 'canceled by user',
+		    completed_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND status IN ('pending', 'running')
+		RETURNING id, idempotency_key, status, input_url, total_rows, processed_rows,
+		          retries, max_retries, error_message, created_at, updated_at, completed_at
+	`
+	row := r.db.QueryRowContext(ctx, query, id)
+	return scanJob(row)
+}
+
+func (r *jobRepo) TouchJob(ctx context.Context, id uuid.UUID) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE jobs SET updated_at = NOW() WHERE id = $1`, id)
+	return err
 }
 
 // --- scan helpers ---
