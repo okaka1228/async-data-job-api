@@ -61,11 +61,11 @@ go test -timeout 30s ./internal/...
 
 ## テストカバレッジ
 
-現在 **84.6%**（`cmd/` と DB 接続の `repository/` 除く）。
+現在 **84.5%**（`cmd/` と DB 接続の `repository/` 除く）。
 
 - `internal/config`, `domain`, `queue` → **100%**
-- `internal/api` → **85.8%**
-- `internal/worker` → **80.5%**
+- `internal/api` → **85.2%**
+- `internal/worker` → **81.0%**
 - `repository/` は統合テスト（`-tags=integration`）でカバー
 
 ## ディレクトリ構成
@@ -92,12 +92,15 @@ docs/                ADR、API examples、OpenAPI spec
 - **リトライ**: 失敗時に `retries` をインクリメントし `pending` に戻す。`max_retries` 超過で `failed`
 - **DLQ**: 失敗履歴は `failed_job_entries` テーブルに記録
 - **冪等性**: `idempotency_key` (UNIQUE) で重複作成を防止、既存ジョブを返す
+- **環境変数は Config で一元管理**: `OTEL_EXPORTER_OTLP_ENDPOINT` を含む全変数を `internal/config/config.go` の `Config` 構造体で管理し、`os.Getenv` の直接呼び出しは行わない
+- **キャンセルは 1 クエリで完結**: `JobRepository.CancelJob` が `UPDATE ... WHERE status IN ('pending','running') RETURNING *` で状態確認と更新を atomic に実行。失敗時のみ `GetByID` で 404/409 を判別する
 
 ## テスト方針
 
 - **ユニットテスト**: `_test.go` ファイル、モックリポジトリ使用、`go test ./...`
 - **統合テスト**: `//go:build integration` タグ、実 PostgreSQL 接続、`go test -tags=integration ./...`
 - **Prometheus テスト注意**: `promauto` はグローバル登録のため、テスト内では `NewMetrics()` をパッケージレベルで一度だけ呼ぶ
+- **ベンチマーク**: `internal/worker/processor_bench_test.go` に 1GB 処理ベンチマークあり（後述）
 
 ## API エンドポイント
 
@@ -110,6 +113,36 @@ docs/                ADR、API examples、OpenAPI spec
 | GET    | `/api/v1/jobs/{id}/failures`| DLQ 失敗履歴     |
 | GET    | `/healthz`                  | ヘルスチェック     |
 | GET    | `/metrics`                  | Prometheus       |
+
+## パフォーマンス特性
+
+Intel Core Ultra 7 265 (4コア) / Go 1.22 での計測値。
+
+### 1GB ファイル処理時間（HTTP ストリーム）
+
+| フォーマット | 処理時間 | スループット | 行数 |
+|------------|---------|------------|------|
+| NDJSON     | 約 2.2 秒 | 487 MB/s   | ~14M |
+| JSON array | 約 4.4 秒 | 242 MB/s   | ~14M |
+
+JSON array が NDJSON の約 2 倍遅いのは `json.Decoder.More()` のオーバーヘッドによるもの。
+
+### API スループット（50並列）
+
+| エンドポイント | RPS | p50 | p99 |
+|--------------|-----|-----|-----|
+| `GET /healthz` | ~24,800 | 0.7ms | 43ms |
+| `GET /api/v1/jobs` | ~5,000 | 8ms | 98ms |
+| `GET /api/v1/jobs/{id}` | ~9,000 | 4ms | 40ms |
+| `POST /api/v1/jobs` | ~6,000 | 7ms | 38ms |
+
+### 主な最適化ポイント
+
+- **スキャナーバッファ再利用**: `sync.Pool` で 1MB バッファをワーカー間共有
+- **コンテキストチェック間引き**: 全行ではなく 1000 行ごとに `ctx.Done()` 確認
+- **複合インデックス**: `(status, updated_at) WHERE status='pending'` で poller クエリを高速化（migration 000002）
+- **スライス事前確保**: `List`, `ListFailedEntries`, `FetchPendingJobs` で `make([]T, 0, limit)` を使用
+- **HTTP Transport 設定**: `MaxIdleConnsPerHost: 16` でコネクション再利用を明示的に設定
 
 ## 環境変数
 

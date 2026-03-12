@@ -116,6 +116,25 @@ func (m *mockJobRepo) FetchPendingJobs(_ context.Context, _ int) ([]domain.Job, 
 	return nil, nil
 }
 
+func (m *mockJobRepo) TouchJob(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
+func (m *mockJobRepo) CancelJob(_ context.Context, id uuid.UUID) (*domain.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j, ok := m.jobs[id]
+	if !ok {
+		return nil, nil
+	}
+	if j.Status != domain.StatusPending && j.Status != domain.StatusRunning {
+		return nil, nil
+	}
+	j.Status = domain.StatusCanceled
+	j.ErrorMessage = "canceled by user"
+	return j, nil
+}
+
 // --- shared test fixtures ---
 
 var (

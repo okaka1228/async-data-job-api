@@ -55,7 +55,11 @@ func MetricsMiddleware(metrics *observability.Metrics) func(http.Handler) http.H
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			ww := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+			// Reuse statusWriter if already wrapped by an outer middleware (e.g. LoggingMiddleware).
+			ww, ok := w.(*statusWriter)
+			if !ok {
+				ww = &statusWriter{ResponseWriter: w, status: http.StatusOK}
+			}
 
 			next.ServeHTTP(ww, r)
 

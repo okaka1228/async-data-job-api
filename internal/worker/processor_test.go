@@ -78,6 +78,14 @@ func (m *mockJobRepo) FetchPendingJobs(ctx context.Context, limit int) ([]domain
 	return m.pendingJobs, nil
 }
 
+func (m *mockJobRepo) CancelJob(_ context.Context, _ uuid.UUID) (*domain.Job, error) {
+	return nil, nil
+}
+
+func (m *mockJobRepo) TouchJob(_ context.Context, _ uuid.UUID) error {
+	return nil
+}
+
 var testMetrics = observability.NewMetrics()
 
 func TestProcessor_FailureAndRetry(t *testing.T) {

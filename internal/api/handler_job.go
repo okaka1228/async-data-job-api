@@ -152,35 +152,33 @@ func (h *JobHandler) CancelJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	job, err := h.repo.GetByID(ctx, id)
-	if err != nil {
-		h.logger.Error("failed to get job for cancel", "error", err)
-		Error(w, http.StatusInternalServerError, "internal error", "")
-		return
-	}
-	if job == nil {
-		Error(w, http.StatusNotFound, "job not found", "")
-		return
-	}
 
-	if !job.CanCancel() {
-		Error(w, http.StatusConflict, "job cannot be canceled", "current status: "+job.Status)
-		return
-	}
-
-	updated, err := h.repo.MarkCompleted(ctx, id, domain.StatusCanceled, "canceled by user")
+	// Single query: update only if pending/running, return updated job.
+	job, err := h.repo.CancelJob(ctx, id)
 	if err != nil {
 		h.logger.Error("failed to cancel job", "error", err)
 		Error(w, http.StatusInternalServerError, "failed to cancel job", "")
 		return
 	}
 
-	if updated {
-		h.metrics.JobsCanceled.Inc()
-		h.logger.Info("job canceled", "job_id", id)
+	if job == nil {
+		// Nothing was updated — check why (not found vs. non-cancelable state).
+		existing, err := h.repo.GetByID(ctx, id)
+		if err != nil {
+			h.logger.Error("failed to get job for cancel", "error", err)
+			Error(w, http.StatusInternalServerError, "internal error", "")
+			return
+		}
+		if existing == nil {
+			Error(w, http.StatusNotFound, "job not found", "")
+			return
+		}
+		Error(w, http.StatusConflict, "job cannot be canceled", "current status: "+existing.Status)
+		return
 	}
 
-	job.Status = domain.StatusCanceled
+	h.metrics.JobsCanceled.Inc()
+	h.logger.Info("job canceled", "job_id", id)
 	JSON(w, http.StatusOK, job)
 }
 

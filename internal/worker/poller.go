@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/femto/async-data-job-api/internal/domain"
 	"github.com/femto/async-data-job-api/internal/queue"
 	"github.com/femto/async-data-job-api/internal/repository"
 )
@@ -78,10 +77,9 @@ func (p *Poller) poll(ctx context.Context) {
 			}
 			p.logger.Warn("failed to enqueue pending job during poll", "job_id", job.ID, "error", err)
 		} else {
-			// Update the timestamp so we don't pick it up immediately on the next poll
+			// Touch updated_at so we don't pick this job up again immediately on the next poll
 			// if the worker hasn't started it yet (e.g. if the queue is backed up for a minute).
-			// We just update `updated_at` without changing the status.
-			_, _ = p.repo.UpdateStatus(ctx, job.ID, domain.StatusPending)
+			_ = p.repo.TouchJob(ctx, job.ID)
 			p.logger.Info("re-enqueued stuck pending job", "job_id", job.ID, "age", age.Round(time.Second))
 		}
 	}
