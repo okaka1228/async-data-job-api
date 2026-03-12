@@ -1,20 +1,21 @@
+version: "2"
+
 linters:
+  default: none
   enable:
     - errcheck
-    - gosimple
-    - govet
     - staticcheck
+    - govet
     - unused
     - ineffassign
     - typecheck
     - bodyclose
     - gocritic
+  exclusions:
+    paths:
+      - vendor
 
 linters-settings:
   govet:
     enable:
       - shadow
-
-issues:
-  exclude-dirs:
-    - vendor
