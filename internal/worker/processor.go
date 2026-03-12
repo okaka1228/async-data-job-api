@@ -60,7 +60,7 @@ func NewProcessor(
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
-				MaxIdleConns:        16,
+				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 16,
 				IdleConnTimeout:     90 * time.Second,
 			},
@@ -200,13 +200,14 @@ func (p *Processor) processNDJSON(ctx context.Context, job *domain.Job, r io.Rea
 		if metricsBatch >= batchSize {
 			p.metrics.RowsProcessed.Add(float64(metricsBatch))
 			metricsBatch = 0
-			
+
 			// Throttle DB updates to max 1 per second
-			if time.Since(lastUpdate) >= time.Second {
+			now := time.Now()
+			if now.Sub(lastUpdate) >= time.Second {
 				if err := p.repo.UpdateProgress(ctx, job.ID, processed, 0); err != nil {
 					logger.Warn("failed to update progress", "error", err)
 				}
-				lastUpdate = time.Now()
+				lastUpdate = now
 			}
 		}
 	}
@@ -271,12 +272,14 @@ func (p *Processor) processJSON(ctx context.Context, job *domain.Job, r io.Reade
 		if metricsBatch >= batchSize {
 			p.metrics.RowsProcessed.Add(float64(metricsBatch))
 			metricsBatch = 0
+
 			// Throttle DB updates to max 1 per second
-			if time.Since(lastUpdate) >= time.Second {
+			now := time.Now()
+			if now.Sub(lastUpdate) >= time.Second {
 				if err := p.repo.UpdateProgress(ctx, job.ID, processed, 0); err != nil {
 					logger.Warn("failed to update progress", "error", err)
 				}
-				lastUpdate = time.Now()
+				lastUpdate = now
 			}
 		}
 	}
