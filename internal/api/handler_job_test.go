@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/femto/async-data-job-api/internal/domain"
@@ -18,14 +20,17 @@ import (
 // --- mock repository ---
 
 type mockJobRepo struct {
-	jobs map[uuid.UUID]*domain.Job
-	byKey map[string]*domain.Job
+	mu            sync.Mutex
+	jobs          map[uuid.UUID]*domain.Job
+	byKey         map[string]*domain.Job
+	failedEntries map[uuid.UUID][]domain.FailedJobEntry
 }
 
 func newMockJobRepo() *mockJobRepo {
 	return &mockJobRepo{
-		jobs:  make(map[uuid.UUID]*domain.Job),
-		byKey: make(map[string]*domain.Job),
+		jobs:          make(map[uuid.UUID]*domain.Job),
+		byKey:         make(map[string]*domain.Job),
+		failedEntries: make(map[uuid.UUID][]domain.FailedJobEntry),
 	}
 }
 
@@ -256,5 +261,258 @@ func TestHealthz(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestCancelJob_Success(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	jobID := uuid.New()
+	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: "test"}
+	repo.mu.Lock()
+	repo.jobs[jobID] = job
+	repo.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/cancel", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+	
+	repo.mu.Lock()
+	updatedJob := repo.jobs[jobID]
+	repo.mu.Unlock()
+	if updatedJob.Status != domain.StatusCanceled {
+		t.Errorf("expected status canceled, got %s", updatedJob.Status)
+	}
+}
+
+func TestCancelJob_Uncancelable(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	jobID := uuid.New()
+	job := &domain.Job{ID: jobID, Status: domain.StatusSucceeded, InputURL: "test"}
+	repo.mu.Lock()
+	repo.jobs[jobID] = job
+	repo.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/cancel", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Errorf("expected 409 Conflict if already successful, got %d", rr.Code)
+	}
+}
+
+func TestGetJobFailures_Success(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	jobID := uuid.New()
+	repo.mu.Lock()
+	if repo.failedEntries == nil {
+		repo.failedEntries = make(map[uuid.UUID][]domain.FailedJobEntry)
+	}
+	repo.failedEntries[jobID] = []domain.FailedJobEntry{
+		{JobID: jobID, ErrorMessage: "some failure"},
+	}
+	repo.jobs[jobID] = &domain.Job{ID: jobID, Status: domain.StatusFailed, InputURL: "test"}
+	repo.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID.String()+"/failures", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestGetJob_Found(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	jobID := uuid.New()
+	repo.mu.Lock()
+	repo.jobs[jobID] = &domain.Job{ID: jobID, Status: domain.StatusRunning, InputURL: "http://x"}
+	repo.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/"+jobID.String(), nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+
+	var resp domain.Job
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if resp.ID != jobID {
+		t.Errorf("expected job ID %s, got %s", jobID, resp.ID)
+	}
+}
+
+func TestGetJob_BadUUID(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/not-a-uuid", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestCancelJob_NotFound(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+uuid.New().String()+"/cancel", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestCancelJob_BadUUID(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/not-a-uuid/cancel", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestGetJobFailures_BadUUID(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs/not-a-uuid/failures", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestCreateJob_MalformedJSON(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	handler := NewJobHandler(repo, q, testMetrics, testLogger)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewBufferString(`{invalid}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CreateJob(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for malformed JSON, got %d", rr.Code)
+	}
+}
+
+func TestCreateJob_WithMaxRetries(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	handler := NewJobHandler(repo, q, testMetrics, testLogger)
+
+	body := `{"input_url": "https://example.com/data.json", "max_retries": 5}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.CreateJob(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+
+	var resp domain.Job
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if resp.MaxRetries != 5 {
+		t.Errorf("expected max_retries 5, got %d", resp.MaxRetries)
+	}
+}
+
+func TestListJobs_WithFilter(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	// Seed a job
+	jobID := uuid.New()
+	repo.mu.Lock()
+	repo.jobs[jobID] = &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: "test"}
+	repo.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/jobs?limit=5&offset=0&status=pending", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestRecoverMiddleware_PanicRecovery(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	panicHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("test panic")
+	})
+
+	recoverMw := RecoverMiddleware(logger)
+	handler := recoverMw(panicHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rr := httptest.NewRecorder()
+
+	// Should not panic
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 after panic recovery, got %d", rr.Code)
 	}
 }

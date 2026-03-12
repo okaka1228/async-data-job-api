@@ -177,3 +177,98 @@ func TestJobRepo_DLQ(t *testing.T) {
 	db.ExecContext(ctx, "DELETE FROM failed_job_entries WHERE job_id = $1", job.ID)
 	db.ExecContext(ctx, "DELETE FROM jobs WHERE id = $1", job.ID)
 }
+
+func TestJobRepo_UpdateProgressAndMarkCompleted(t *testing.T) {
+	db := setupDB(t)
+	defer db.Close()
+	repo := NewJobRepository(db)
+	ctx := context.Background()
+
+	job := &domain.Job{InputURL: "http://example.com/progress", Status: domain.StatusPending}
+	_ = repo.Create(ctx, job)
+
+	err := repo.UpdateProgress(ctx, job.ID, 50, 100)
+	if err != nil {
+		t.Fatalf("UpdateProgress() error = %v", err)
+	}
+
+	got, _ := repo.GetByID(ctx, job.ID)
+	if got.ProcessedRows != 50 || got.TotalRows != 100 {
+		t.Errorf("expected 50/100, got %d/%d", got.ProcessedRows, got.TotalRows)
+	}
+
+	ok, err := repo.MarkCompleted(ctx, job.ID, domain.StatusSucceeded, "")
+	if err != nil || !ok {
+		t.Fatalf("MarkCompleted() failed: %v", err)
+	}
+
+	gotFinal, _ := repo.GetByID(ctx, job.ID)
+	if gotFinal.Status != domain.StatusSucceeded {
+		t.Errorf("expected status succeeded, got %s", gotFinal.Status)
+	}
+	
+	db.ExecContext(ctx, "DELETE FROM jobs WHERE id = $1", job.ID)
+}
+
+func TestJobRepo_IncrementRetry(t *testing.T) {
+	db := setupDB(t)
+	defer db.Close()
+	repo := NewJobRepository(db)
+	ctx := context.Background()
+
+	job := &domain.Job{InputURL: "test-retry", Status: domain.StatusPending}
+	_ = repo.Create(ctx, job)
+
+	count, err := repo.IncrementRetry(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("IncrementRetry() failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected retry 1, got %d", count)
+	}
+
+	got, _ := repo.GetByID(ctx, job.ID)
+	if got.Retries != 1 {
+		t.Errorf("expected retries in db 1, got %d", got.Retries)
+	}
+	
+	db.ExecContext(ctx, "DELETE FROM jobs WHERE id = $1", job.ID)
+}
+
+func TestJobRepo_FetchPendingJobs(t *testing.T) {
+	db := setupDB(t)
+	defer db.Close()
+	repo := NewJobRepository(db)
+	ctx := context.Background()
+
+	// Create an old pending job
+	job1 := &domain.Job{InputURL: "fetch-1", Status: domain.StatusPending}
+	_ = repo.Create(ctx, job1)
+	db.ExecContext(ctx, "UPDATE jobs SET updated_at = NOW() - INTERVAL '6 minutes' WHERE id = $1", job1.ID)
+
+	// Create a new pending job (should be excluded if grace period is 5m)
+	job2 := &domain.Job{InputURL: "fetch-2", Status: domain.StatusPending}
+	_ = repo.Create(ctx, job2)
+	db.ExecContext(ctx, "UPDATE jobs SET updated_at = NOW() WHERE id = $1", job2.ID)
+
+	jobs, err := repo.FetchPendingJobs(ctx, 10)
+	if err != nil {
+		t.Fatalf("FetchPendingJobs failed: %v", err)
+	}
+
+	// Should only find job1
+	found := false
+	for _, j := range jobs {
+		if j.ID == job1.ID {
+			found = true
+		}
+		if j.ID == job2.ID {
+			t.Errorf("job2 should not be fetched, it was updated recently")
+		}
+	}
+	if !found {
+		t.Errorf("job1 should be fetched")
+	}
+
+	db.ExecContext(ctx, "DELETE FROM jobs WHERE id IN ($1, $2)", job1.ID, job2.ID)
+}
