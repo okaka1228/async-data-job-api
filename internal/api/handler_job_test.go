@@ -363,7 +363,9 @@ func TestGetJob_Found(t *testing.T) {
 	}
 
 	var resp domain.Job
-	json.NewDecoder(rr.Body).Decode(&resp)
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp.ID != jobID {
 		t.Errorf("expected job ID %s, got %s", jobID, resp.ID)
 	}
@@ -468,7 +470,9 @@ func TestCreateJob_WithMaxRetries(t *testing.T) {
 	}
 
 	var resp domain.Job
-	json.NewDecoder(rr.Body).Decode(&resp)
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp.MaxRetries != 5 {
 		t.Errorf("expected max_retries 5, got %d", resp.MaxRetries)
 	}
