@@ -14,7 +14,7 @@ linters:
     paths:
       - vendor
 
-linters-settings:
+settings:
   govet:
     enable:
       - shadow
