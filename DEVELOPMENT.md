@@ -7,6 +7,7 @@
 - [Go](https://go.dev/doc/install) 1.22 以上
 - [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/)
 - `make` コマンド
+- [golangci-lint](https://golangci-lint.run/docs/install/) v2（CI で使用）
 
 ---
 
@@ -35,8 +36,13 @@ docker compose up -d postgres
 ### 3. アプリケーションのローカルデバッグ実行
 
 コンテナではなく、手元のターミナルで実行するには以下のコマンドを使用します。
+事前に `docker compose up -d postgres` でDBを起動し、マイグレーションを実行しておく必要があります。
 
 ```bash
+# マイグレーション（初回のみ）
+go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jobapi?sslmode=disable" up
+
 # 環境変数を指定して実行
 DATABASE_URL="postgres://jobapi:jobapi@localhost:5432/jobapi?sslmode=disable" make run
 ```
@@ -46,6 +52,7 @@ DATABASE_URL="postgres://jobapi:jobapi@localhost:5432/jobapi?sslmode=disable" ma
 ## テストの実行
 
 テストは「依存関係なしで動くUnit Test」と「実DBを必要とするIntegration Test」に分かれています。
+現在のテストカバレッジは **84.6%** です（`cmd/` と `repository/` DB接続部分を除く）。
 
 ### Unit Test (DB不要)
 
@@ -70,19 +77,31 @@ migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jo
 make test-integration
 ```
 
----
-
-## Lint と フォーマット
-
-CI でもチェックされるため、コミット前に手元で Lint を通しておくことを推奨します。
+### カバレッジレポート
 
 ```bash
-# golangci-lint の実行
-make lint
+# カバレッジレポートを生成（coverage.html）
+make test-coverage
+```
 
-# gofmt と goimports の実行
+---
+
+## Lint とフォーマット
+
+**コミット・Push前に必ず Lint とテストを通してください。**
+
+```bash
+# Push前チェック（必須）
+make lint
+go test -timeout 30s ./internal/...
+
+# gofmt の実行
 make fmt
 ```
+
+> **Note**: `make fmt` は `goimports` も使用します。未インストールの場合は `go install golang.org/x/tools/cmd/goimports@latest` を実行してください。
+
+> **Note**: golangci-lint v2 を使用しています。設定は `.golangci.yml`（`version: "2"` 形式）を参照してください。
 
 ---
 
@@ -109,6 +128,13 @@ migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jo
 
 ---
 
+## Git ワークフロー
+
+- **main ブランチへの直接 push は禁止です。** 必ず別ブランチを切って PR を作成してください。
+- ドキュメントのみの変更（`*.md`, `LICENSE`, `docs/**`）では CI が実行されません。
+
+---
+
 ## アプリケーションの拡張・改修ガイド
 
 ### 1. APIエンドポイントを追加する場合
@@ -122,5 +148,5 @@ migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jo
 データの中身に応じた集計・別サービスへの送信などを行いたい場合は、以下の手順で拡張してください。
 
 1. **ドメインモデルの追加**: 読み込んだ1行のデータをデコードする為の構造体を定義する。
-2. **Processorの書き換え**: `internal/worker/processor.go` 内の `processNDJSON` または `processJSON` で、簡易チェック（`line[0] != '{'`）を行っている部分を `json.Unmarshal` に差し替え、ビジネスロジックを呼ぶように変更する。
+2. **Processorの書き換え**: `internal/worker/processor.go` 内の `processNDJSON` または `processJSON` で、`json.Valid(line)` による検証を行っている部分を `json.Unmarshal` に差し替え、ビジネスロジックを呼ぶように変更する。
 3. **リポジトリの拡張**: DB保存が必要な場合は `internal/repository` に処理を追加して登録する。
