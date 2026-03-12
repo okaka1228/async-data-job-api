@@ -97,15 +97,15 @@ make test-coverage  # カバレッジレポート生成 (coverage.html)
 
 ## Test Coverage
 
-現在のテストカバレッジは **84.6%** です（`cmd/` と `repository/` DB接続部分を除く）。
+現在のテストカバレッジは **84.5%** です（`cmd/` と `repository/` DB接続部分を除く）。
 
 | Package | Coverage |
 |---------|----------|
 | `internal/config` | 100% |
 | `internal/domain` | 100% |
 | `internal/queue` | 100% |
-| `internal/api` | 85.8% |
-| `internal/worker` | 80.5% |
+| `internal/api` | 85.2% |
+| `internal/worker` | 81.0% |
 
 ## Configuration
 
