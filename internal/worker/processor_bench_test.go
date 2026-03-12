@@ -34,12 +34,12 @@ func jsonArrayGenerator(pw *io.PipeWriter, targetBytes int) {
 	comma := []byte(",")
 	written := 0
 
-	pw.Write([]byte("["))
+	_, _ = pw.Write([]byte("["))
 	written++
 	first := true
 	for written < targetBytes-1 {
 		if !first {
-			pw.Write(comma)
+			_, _ = pw.Write(comma)
 			written++
 		}
 		n, err := pw.Write(elem)
@@ -49,7 +49,7 @@ func jsonArrayGenerator(pw *io.PipeWriter, targetBytes int) {
 		written += n
 		first = false
 	}
-	pw.Write([]byte("]"))
+	_, _ = pw.Write([]byte("]"))
 	pw.Close()
 }
 
@@ -161,19 +161,19 @@ func BenchmarkProcessJSON_1GB_ViaHTTP(b *testing.B) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		written := 0
-		w.Write([]byte("["))
+		_, _ = w.Write([]byte("["))
 		written++
 		first := true
 		for written < sizeBytes-1 {
 			if !first {
-				w.Write(comma)
+				_, _ = w.Write(comma)
 				written++
 			}
-			w.Write(elem)
+			_, _ = w.Write(elem)
 			written += len(elem)
 			first = false
 		}
-		w.Write([]byte("]"))
+		_, _ = w.Write([]byte("]"))
 	}))
 	defer ts.Close()
 

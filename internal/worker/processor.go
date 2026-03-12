@@ -23,8 +23,12 @@ import (
 var tracer = otel.Tracer("worker")
 
 // scannerBufPool reuses 1MB scanner buffers across concurrent workers.
+// Stores *[]byte (pointer) to avoid heap allocation when boxing into any.
 var scannerBufPool = sync.Pool{
-	New: func() any { return make([]byte, 0, 1024*1024) },
+	New: func() any {
+		b := make([]byte, 0, 1024*1024)
+		return &b
+	},
 }
 
 const contextCheckInterval = 1000
@@ -160,11 +164,11 @@ func (p *Processor) processData(ctx context.Context, job *domain.Job, logger *sl
 }
 
 func (p *Processor) processNDJSON(ctx context.Context, job *domain.Job, r io.Reader, logger *slog.Logger) error {
-	buf := scannerBufPool.Get().([]byte)
-	defer scannerBufPool.Put(buf[:0])
+	bufPtr := scannerBufPool.Get().(*[]byte)
+	defer scannerBufPool.Put(bufPtr)
 
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(buf, 10*1024*1024) // 10MB max line
+	scanner.Buffer(*bufPtr, 10*1024*1024) // 10MB max line
 	var processed int64
 
 	const batchSize = 5000
