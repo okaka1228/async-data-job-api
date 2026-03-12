@@ -40,7 +40,7 @@ docker compose up -d postgres
 
 ```bash
 # マイグレーション（初回のみ）
-go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.18.1
 migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jobapi?sslmode=disable" up
 
 # 環境変数を指定して実行
@@ -187,7 +187,8 @@ hey -n 300 -c 30 \
 ## Git ワークフロー
 
 - **main ブランチへの直接 push は禁止です。** 必ず別ブランチを切って PR を作成してください。
-- ドキュメントのみの変更（`*.md`, `LICENSE`, `docs/**`）では CI が実行されません。
+- ドキュメントのみの変更（`*.md`, `LICENSE`, `docs/**`）では lint / test / build はスキップされ、`ci-gate` が即座に通過します。
+- ソースコードを変更した PR は `ci-gate` が lint → test → build の全通過を確認してから通過します。ブランチ保護の必須ステータスチェックには `ci-gate` を設定してください。
 
 ---
 
