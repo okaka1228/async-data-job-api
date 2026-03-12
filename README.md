@@ -34,7 +34,7 @@
 | Tracing | OpenTelemetry |
 | Container | Docker Compose |
 | CI | GitHub Actions |
-| Lint | golangci-lint |
+| Lint | golangci-lint v2 |
 
 ## Quick Start
 
@@ -88,11 +88,24 @@ docs/                        # ADR, API examples, OpenAPI
 make build          # ビルド
 make test           # ユニットテスト
 make test-integration  # 統合テスト（要 PostgreSQL）
-make lint           # golangci-lint
+make lint           # golangci-lint v2
 make up             # Docker Compose 起動
 make down           # Docker Compose 停止 & ボリューム削除
 make logs           # ログ表示
+make test-coverage  # カバレッジレポート生成 (coverage.html)
 ```
+
+## Test Coverage
+
+現在のテストカバレッジは **84.6%** です（`cmd/` と `repository/` DB接続部分を除く）。
+
+| Package | Coverage |
+|---------|----------|
+| `internal/config` | 100% |
+| `internal/domain` | 100% |
+| `internal/queue` | 100% |
+| `internal/api` | 85.8% |
+| `internal/worker` | 80.5% |
 
 ## Configuration
 
