@@ -12,7 +12,8 @@ linters:
 
 linters-settings:
   govet:
-    shadow: true
+    enable:
+      - shadow
 
 issues:
   exclude-dirs:

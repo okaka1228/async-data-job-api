@@ -188,7 +188,7 @@ func TestCreateJob_Idempotency(t *testing.T) {
 	}
 
 	var first domain.Job
-	json.NewDecoder(rr1.Body).Decode(&first)
+	_ = json.NewDecoder(rr1.Body).Decode(&first)
 
 	// Second request with same key
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/jobs", bytes.NewBufferString(body))
@@ -201,7 +201,7 @@ func TestCreateJob_Idempotency(t *testing.T) {
 	}
 
 	var second domain.Job
-	json.NewDecoder(rr2.Body).Decode(&second)
+	_ = json.NewDecoder(rr2.Body).Decode(&second)
 
 	if first.ID != second.ID {
 		t.Error("idempotent requests should return the same job ID")
