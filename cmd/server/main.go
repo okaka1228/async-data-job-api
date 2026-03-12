@@ -49,7 +49,7 @@ func main() {
 	defer db.Close()
 
 	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
+	db.SetMaxIdleConns(25)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
 	// Wait for DB readiness

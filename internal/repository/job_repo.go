@@ -91,7 +91,7 @@ func (r *jobRepo) List(ctx context.Context, params domain.ListJobsParams) ([]dom
 		       retries, max_retries, error_message, created_at, updated_at, completed_at
 		FROM jobs
 	`
-	args := []interface{}{}
+	args := make([]interface{}, 0, 3)
 	argIdx := 1
 
 	if params.Status != "" {
