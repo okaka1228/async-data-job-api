@@ -12,19 +12,24 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("seed failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg := config.Load()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	db, err := sql.Open("pgx", cfg.DatabaseURL)
 	if err != nil {
-		logger.Error("failed to open database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to open database: %w", err)
 	}
 	defer db.Close()
 
 	if err := db.Ping(); err != nil {
-		logger.Error("database not ready", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("database not ready: %w", err)
 	}
 
 	seeds := []struct {
@@ -53,4 +58,5 @@ func main() {
 	}
 
 	fmt.Println("seed data complete")
+	return nil
 }
