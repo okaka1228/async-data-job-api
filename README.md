@@ -69,7 +69,9 @@ make up-seed
 ## Project Structure
 
 ```
-cmd/server/main.go          # エントリポイント
+cmd/
+  server/main.go             # サーバーエントリポイント
+  seed/main.go               # 開発用シードデータ投入（本番バイナリとは分離）
 internal/
   api/                       # HTTP handlers, router, middleware
   config/                    # 環境変数読み込み
