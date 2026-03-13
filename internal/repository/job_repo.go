@@ -119,7 +119,7 @@ func (r *jobRepo) List(ctx context.Context, params domain.ListJobsParams) ([]dom
 
 	jobs := make([]domain.Job, 0, params.Limit)
 	for rows.Next() {
-		j, err := scanJobFromRows(rows)
+		j, err := scanJob(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -223,7 +223,7 @@ func (r *jobRepo) FetchPendingJobs(ctx context.Context, limit int) ([]domain.Job
 
 	jobs := make([]domain.Job, 0, limit)
 	for rows.Next() {
-		j, err := scanJobFromRows(rows)
+		j, err := scanJob(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -286,8 +286,4 @@ func scanJob(row scannable) (*domain.Job, error) {
 		j.CompletedAt = &completedAt.Time
 	}
 	return &j, nil
-}
-
-func scanJobFromRows(rows *sql.Rows) (*domain.Job, error) {
-	return scanJob(rows)
 }
