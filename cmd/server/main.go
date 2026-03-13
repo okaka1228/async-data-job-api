@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"flag"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,9 +21,6 @@ import (
 )
 
 func main() {
-	seedFlag := flag.Bool("seed", false, "Run seed data and exit")
-	flag.Parse()
-
 	// Logger
 	logLevel := slog.LevelInfo
 	cfg := config.Load()
@@ -67,12 +62,6 @@ func main() {
 	logger.Info("database connected")
 
 	repo := repository.NewJobRepository(db)
-
-	// Seed mode
-	if *seedFlag {
-		runSeed(db, logger)
-		return
-	}
 
 	// Observability
 	metrics := observability.NewMetrics()
@@ -138,35 +127,4 @@ func main() {
 	}
 
 	logger.Info("server stopped")
-}
-
-func runSeed(db *sql.DB, logger *slog.Logger) {
-	logger.Info("running seed data...")
-
-	seeds := []struct {
-		inputURL       string
-		idempotencyKey string
-	}{
-		{"https://jsonplaceholder.typicode.com/posts", "seed-posts"},
-		{"https://jsonplaceholder.typicode.com/comments", "seed-comments"},
-		{"https://jsonplaceholder.typicode.com/users", "seed-users"},
-		{"https://jsonplaceholder.typicode.com/todos", "seed-todos"},
-		{"https://jsonplaceholder.typicode.com/albums", "seed-albums"},
-	}
-
-	query := `
-		INSERT INTO jobs (id, idempotency_key, status, input_url, max_retries, created_at, updated_at)
-		VALUES (gen_random_uuid(), $1, 'pending', $2, 3, NOW(), NOW())
-		ON CONFLICT (idempotency_key) DO NOTHING
-	`
-
-	for _, s := range seeds {
-		if _, err := db.Exec(query, s.idempotencyKey, s.inputURL); err != nil {
-			logger.Error("seed insert failed", "error", err, "url", s.inputURL)
-		} else {
-			logger.Info("seed inserted", "url", s.inputURL)
-		}
-	}
-
-	fmt.Println("seed data complete")
 }

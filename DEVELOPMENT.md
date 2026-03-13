@@ -29,6 +29,9 @@ go mod tidy
 # 全てのサービス（DB, API, Prometheus）を起動する場合
 make up
 
+# シードデータ付き起動
+make up-seed
+
 # DBだけを起動し、APIはローカル（ホスト側）でデバッグ実行する場合
 docker compose up -d postgres
 ```
@@ -45,6 +48,9 @@ migrate -path ./migrations -database "postgres://jobapi:jobapi@localhost:5432/jo
 
 # 環境変数を指定して実行
 DATABASE_URL="postgres://jobapi:jobapi@localhost:5432/jobapi?sslmode=disable" make run
+
+# シードデータ投入（ローカル）
+DATABASE_URL="postgres://jobapi:jobapi@localhost:5432/jobapi?sslmode=disable" go run ./cmd/seed
 ```
 
 ---
@@ -103,8 +109,8 @@ go test -run '^$' -bench 'BenchmarkProcess.*_100MB' -benchtime=1x ./internal/wor
 
 | フォーマット | 処理時間 | スループット | 行数 |
 |------------|---------|------------|------|
-| NDJSON（HTTP） | 約 2.2 秒 | 487 MB/s | ~14M |
-| JSON array（HTTP） | 約 4.4 秒 | 242 MB/s | ~14M |
+| NDJSON（HTTP） | 約 2.3 秒 | 475 MB/s | ~14M |
+| JSON array（HTTP） | 約 4.5 秒 | 236 MB/s | ~14M |
 
 ---
 
@@ -173,12 +179,12 @@ hey -n 300 -c 30 \
 
 **計測結果（Intel Core Ultra 7 265 / 4コア / 50並列）**
 
-| エンドポイント | RPS | p50 | p95 | p99 |
-|--------------|-----|-----|-----|-----|
-| `GET /healthz` | ~24,800 | 0.7ms | 24ms | 43ms |
-| `GET /api/v1/jobs` | ~5,000 | 8ms | 53ms | 98ms |
-| `GET /api/v1/jobs/{id}` | ~9,000 | 4ms | 27ms | 40ms |
-| `POST /api/v1/jobs` | ~6,000 | 7ms | 29ms | 38ms |
+| エンドポイント | RPS | p50 | p99 |
+|--------------|-----|-----|-----|
+| `GET /healthz` | ~53,400 | 0.8ms | 3.6ms |
+| `GET /api/v1/jobs` | ~5,900 | 7.1ms | 32.6ms |
+| `GET /api/v1/jobs/{id}` | ~20,900 | 2.0ms | 7.5ms |
+| `POST /api/v1/jobs` | ~10,600 | 4.1ms | 13.3ms |
 
 全テストでエラーレート 0%。
 

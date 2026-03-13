@@ -59,7 +59,7 @@ services:
         condition: service_completed_successfully
     environment:
       DATABASE_URL: postgres://jobapi:jobapi@postgres:5432/jobapi?sslmode=disable
-    entrypoint: ["server", "-seed"]
+    entrypoint: ["seed"]
     profiles:
       - seed
     restart: "no"
