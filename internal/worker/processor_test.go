@@ -17,14 +17,15 @@ import (
 
 // mockJobRepo for recording state changes during processor execution.
 type mockJobRepo struct {
-	mu            sync.Mutex
-	job           *domain.Job
-	failedEntries []domain.FailedJobEntry
-	updatedStatus string
-	isCompleted   bool
-	finalErrorMsg string
-	retryCount    int
-	pendingJobs   []domain.Job
+	mu                   sync.Mutex
+	job                  *domain.Job
+	failedEntries        []domain.FailedJobEntry
+	updatedStatus        string
+	isCompleted          bool
+	finalErrorMsg        string
+	retryCount           int
+	pendingJobs          []domain.Job
+	markCompletedCtxErr  error // ctx.Err() captured at the moment MarkCompleted is called
 }
 
 func (m *mockJobRepo) Create(ctx context.Context, job *domain.Job) error { return nil }
@@ -51,6 +52,7 @@ func (m *mockJobRepo) UpdateProgress(ctx context.Context, id uuid.UUID, processe
 func (m *mockJobRepo) MarkCompleted(ctx context.Context, id uuid.UUID, status, errorMsg string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.markCompletedCtxErr = ctx.Err() // record whether caller passed a live context
 	m.updatedStatus = status
 	m.isCompleted = true
 	m.finalErrorMsg = errorMsg
@@ -548,6 +550,11 @@ func TestProcessor_CleanupCtxSurvivesParentCancel(t *testing.T) {
 	}
 	if repo.updatedStatus != domain.StatusFailed {
 		t.Errorf("expected status failed, got %s", repo.updatedStatus)
+	}
+	// This is the critical assertion: the context passed to MarkCompleted must not be
+	// cancelled, proving that cleanupCtx (WithoutCancel) was used and not the parent ctx.
+	if repo.markCompletedCtxErr != nil {
+		t.Errorf("expected live context passed to MarkCompleted (WithoutCancel), got ctx.Err()=%v — cleanupCtx isolation broken", repo.markCompletedCtxErr)
 	}
 }
 
