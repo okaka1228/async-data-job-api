@@ -73,7 +73,8 @@ func main() {
 
 	// Queue & Worker
 	q := queue.NewChannelQueue(1000)
-	processor := worker.NewProcessor(repo, metrics, logger, cfg.WorkerTimeout, cfg.WorkerMaxRetries)
+	notifier := worker.NewWebhookNotifier(&http.Client{Timeout: 10 * time.Second})
+	processor := worker.NewProcessor(repo, metrics, logger, cfg.WorkerTimeout, cfg.WorkerMaxRetries, notifier)
 	pool := worker.NewPool(cfg.WorkerConcurrency, q, processor, logger)
 	poller := worker.NewPoller(repo, q, logger)
 

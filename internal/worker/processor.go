@@ -41,6 +41,7 @@ type Processor struct {
 	timeout    time.Duration
 	maxRetries int
 	httpClient *http.Client
+	notifier   Notifier
 }
 
 // NewProcessor creates a new processor.
@@ -50,6 +51,7 @@ func NewProcessor(
 	logger *slog.Logger,
 	timeout time.Duration,
 	maxRetries int,
+	notifier Notifier,
 ) *Processor {
 	return &Processor{
 		repo:       repo,
@@ -57,6 +59,7 @@ func NewProcessor(
 		logger:     logger,
 		timeout:    timeout,
 		maxRetries: maxRetries,
+		notifier:   notifier,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -338,6 +341,13 @@ func (p *Processor) handleFailure(ctx context.Context, job *domain.Job, processE
 		if updated {
 			p.metrics.JobsFailed.Inc()
 			logger.Error("job permanently failed after max retries", "retries", retries)
+			// Notify user (fire-and-forget: log error but don't fail the job transition)
+			job.Status = domain.StatusFailed
+			job.ErrorMessage = errMsg
+			job.Retries = retries
+			if err := p.notifier.Notify(ctx, job); err != nil {
+				logger.Warn("failed to send failure notification", "job_id", job.ID, "error", err)
+			}
 		}
 	}
 }

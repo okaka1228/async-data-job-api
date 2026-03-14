@@ -61,11 +61,12 @@ go test -timeout 30s ./internal/...
 
 ## テストカバレッジ
 
-現在 **84.5%**（`cmd/` と DB 接続の `repository/` 除く）。
+主要パッケージの関数カバレッジ（`cmd/` と DB 接続の `repository/` 除く）。
 
-- `internal/config`, `domain`, `queue` → **100%**
-- `internal/api` → **85.2%**
-- `internal/worker` → **81.0%**
+- `internal/config`, `queue` → **100%**
+- `internal/domain` → **80%**
+- `internal/api` ハンドラ群 → **73〜100%**（全ハンドラにユニットテストあり）
+- `internal/worker` processor/notifier → **75〜93%**
 - `repository/` は統合テスト（`-tags=integration`）でカバー
 
 ## ディレクトリ構成
@@ -93,9 +94,11 @@ docs/                ADR、API examples、OpenAPI spec
 - **ジョブ状態遷移**: `pending` → `running` → `succeeded` / `failed` / `canceled`
 - **リトライ**: 失敗時に `retries` をインクリメントし `pending` に戻す。`max_retries` 超過で `failed`
 - **DLQ**: 失敗履歴は `failed_job_entries` テーブルに記録
+- **Webhook 通知**: 永続失敗時に `callback_url` へ fire-and-forget で HTTP POST。`Notifier` インターフェース経由で将来的なキューバック再送に差し替え可能
+- **手動リトライ**: `POST /api/v1/jobs/{id}/retry` で `failed` ジョブを `pending` に戻す（`retries=0` リセット）。`RetryJob` が `UPDATE WHERE status='failed' RETURNING *` で atomic に実行
 - **冪等性**: `idempotency_key` (UNIQUE) で重複作成を防止、既存ジョブを返す
 - **環境変数は Config で一元管理**: `OTEL_EXPORTER_OTLP_ENDPOINT` を含む全変数を `internal/config/config.go` の `Config` 構造体で管理し、`os.Getenv` の直接呼び出しは行わない
-- **キャンセルは 1 クエリで完結**: `JobRepository.CancelJob` が `UPDATE ... WHERE status IN ('pending','running') RETURNING *` で状態確認と更新を atomic に実行。失敗時のみ `GetByID` で 404/409 を判別する
+- **キャンセル/リトライは 1 クエリで完結**: `CancelJob` / `RetryJob` が `UPDATE ... WHERE status IN (...) RETURNING *` で状態確認と更新を atomic に実行。失敗時のみ `GetByID` で 404/409 を判別する
 
 ## テスト方針
 
@@ -112,6 +115,7 @@ docs/                ADR、API examples、OpenAPI spec
 | GET    | `/api/v1/jobs`              | ジョブ一覧       |
 | GET    | `/api/v1/jobs/{id}`         | ジョブ詳細       |
 | POST   | `/api/v1/jobs/{id}/cancel`  | ジョブキャンセル   |
+| POST   | `/api/v1/jobs/{id}/retry`   | 失敗ジョブの再実行 |
 | GET    | `/api/v1/jobs/{id}/failures`| DLQ 失敗履歴     |
 | GET    | `/healthz`                  | ヘルスチェック     |
 | GET    | `/metrics`                  | Prometheus       |

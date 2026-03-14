@@ -43,6 +43,7 @@ func NewRouter(
 			r.Get("/", handler.ListJobs)
 			r.Get("/{id}", handler.GetJob)
 			r.Post("/{id}/cancel", handler.CancelJob)
+			r.Post("/{id}/retry", handler.RetryJob)
 			r.Get("/{id}/failures", handler.GetJobFailures)
 		})
 	})

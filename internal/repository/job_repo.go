@@ -29,6 +29,9 @@ type JobRepository interface {
 	// TouchJob refreshes updated_at without changing any other field.
 	// Used by the poller to prevent a re-enqueued job from being picked up again immediately.
 	TouchJob(ctx context.Context, id uuid.UUID) error
+	// RetryJob resets a failed job to pending with retries=0, allowing the user to re-run it.
+	// Returns the updated job, or nil if not found or not in failed state.
+	RetryJob(ctx context.Context, id uuid.UUID) (*domain.Job, error)
 }
 
 type jobRepo struct {
@@ -42,8 +45,8 @@ func NewJobRepository(db *sql.DB) JobRepository {
 
 func (r *jobRepo) Create(ctx context.Context, job *domain.Job) error {
 	query := `
-		INSERT INTO jobs (id, idempotency_key, status, input_url, max_retries, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO jobs (id, idempotency_key, status, input_url, callback_url, max_retries, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 	job.ID = uuid.New()
 	now := time.Now().UTC()
@@ -55,19 +58,23 @@ func (r *jobRepo) Create(ctx context.Context, job *domain.Job) error {
 	if job.IdempotencyKey != "" {
 		idemKey = &job.IdempotencyKey
 	}
+	var callbackURL *string
+	if job.CallbackURL != "" {
+		callbackURL = &job.CallbackURL
+	}
 
 	// Use WithoutCancel so that the DB insert isn't rolled back or interrupted
 	// by a client disconnect mid-flight, which would skip metric incrementing.
 	insertCtx := context.WithoutCancel(ctx)
 	_, err := r.db.ExecContext(insertCtx, query,
-		job.ID, idemKey, job.Status, job.InputURL, job.MaxRetries, job.CreatedAt, job.UpdatedAt,
+		job.ID, idemKey, job.Status, job.InputURL, callbackURL, job.MaxRetries, job.CreatedAt, job.UpdatedAt,
 	)
 	return err
 }
 
 func (r *jobRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Job, error) {
 	query := `
-		SELECT id, idempotency_key, status, input_url, total_rows, processed_rows,
+		SELECT id, idempotency_key, status, input_url, callback_url, total_rows, processed_rows,
 		       retries, max_retries, error_message, created_at, updated_at, completed_at
 		FROM jobs WHERE id = $1
 	`
@@ -77,7 +84,7 @@ func (r *jobRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Job, error
 
 func (r *jobRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.Job, error) {
 	query := `
-		SELECT id, idempotency_key, status, input_url, total_rows, processed_rows,
+		SELECT id, idempotency_key, status, input_url, callback_url, total_rows, processed_rows,
 		       retries, max_retries, error_message, created_at, updated_at, completed_at
 		FROM jobs WHERE idempotency_key = $1
 	`
@@ -87,7 +94,7 @@ func (r *jobRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.
 
 func (r *jobRepo) List(ctx context.Context, params domain.ListJobsParams) ([]domain.Job, error) {
 	query := `
-		SELECT id, idempotency_key, status, input_url, total_rows, processed_rows,
+		SELECT id, idempotency_key, status, input_url, callback_url, total_rows, processed_rows,
 		       retries, max_retries, error_message, created_at, updated_at, completed_at
 		FROM jobs
 	`
@@ -153,8 +160,8 @@ func (r *jobRepo) UpdateProgress(ctx context.Context, id uuid.UUID, processedRow
 func (r *jobRepo) MarkCompleted(ctx context.Context, id uuid.UUID, status, errorMsg string) (bool, error) {
 	// Only update if it's not already terminal
 	query := `
-		UPDATE jobs 
-		SET status = $1, error_message = $2, completed_at = NOW(), updated_at = NOW() 
+		UPDATE jobs
+		SET status = $1, error_message = $2, completed_at = NOW(), updated_at = NOW()
 		WHERE id = $3 AND status NOT IN ('succeeded', 'failed', 'canceled')
 	`
 	res, err := r.db.ExecContext(ctx, query, status, errorMsg, id)
@@ -208,7 +215,7 @@ func (r *jobRepo) ListFailedEntries(ctx context.Context, jobID uuid.UUID) ([]dom
 func (r *jobRepo) FetchPendingJobs(ctx context.Context, limit int) ([]domain.Job, error) {
 	// Only fetch pending jobs that haven't been updated in the last 5 minutes (assumed stuck)
 	query := `
-		SELECT id, idempotency_key, status, input_url, total_rows, processed_rows,
+		SELECT id, idempotency_key, status, input_url, callback_url, total_rows, processed_rows,
 		       retries, max_retries, error_message, created_at, updated_at, completed_at
 		FROM jobs
 		WHERE status = 'pending' AND updated_at < NOW() - INTERVAL '5 minutes'
@@ -240,7 +247,7 @@ func (r *jobRepo) CancelJob(ctx context.Context, id uuid.UUID) (*domain.Job, err
 		SET status = 'canceled', error_message = 'canceled by user',
 		    completed_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND status IN ('pending', 'running')
-		RETURNING id, idempotency_key, status, input_url, total_rows, processed_rows,
+		RETURNING id, idempotency_key, status, input_url, callback_url, total_rows, processed_rows,
 		          retries, max_retries, error_message, created_at, updated_at, completed_at
 	`
 	row := r.db.QueryRowContext(ctx, query, id)
@@ -252,6 +259,20 @@ func (r *jobRepo) TouchJob(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+// RetryJob resets a failed job to pending with retries=0.
+// Returns the updated job, or nil if not found or not in failed state.
+func (r *jobRepo) RetryJob(ctx context.Context, id uuid.UUID) (*domain.Job, error) {
+	query := `
+		UPDATE jobs
+		SET status = 'pending', retries = 0, error_message = NULL, updated_at = NOW()
+		WHERE id = $1 AND status = 'failed'
+		RETURNING id, idempotency_key, status, input_url, callback_url, total_rows, processed_rows,
+		          retries, max_retries, error_message, created_at, updated_at, completed_at
+	`
+	row := r.db.QueryRowContext(ctx, query, id)
+	return scanJob(row)
+}
+
 // --- scan helpers ---
 
 type scannable interface {
@@ -260,11 +281,11 @@ type scannable interface {
 
 func scanJob(row scannable) (*domain.Job, error) {
 	var j domain.Job
-	var idemKey, errMsg sql.NullString
+	var idemKey, callbackURL, errMsg sql.NullString
 	var completedAt sql.NullTime
 
 	err := row.Scan(
-		&j.ID, &idemKey, &j.Status, &j.InputURL,
+		&j.ID, &idemKey, &j.Status, &j.InputURL, &callbackURL,
 		&j.TotalRows, &j.ProcessedRows,
 		&j.Retries, &j.MaxRetries,
 		&errMsg, &j.CreatedAt, &j.UpdatedAt, &completedAt,
@@ -278,6 +299,9 @@ func scanJob(row scannable) (*domain.Job, error) {
 
 	if idemKey.Valid {
 		j.IdempotencyKey = idemKey.String
+	}
+	if callbackURL.Valid {
+		j.CallbackURL = callbackURL.String
 	}
 	if errMsg.Valid {
 		j.ErrorMessage = errMsg.String
