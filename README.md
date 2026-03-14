@@ -4,12 +4,14 @@
 
 ## Features
 
-- **ジョブ管理**: 作成・一覧・詳細・キャンセル API
+- **ジョブ管理**: 作成・一覧・詳細・キャンセル・手動リトライ API
 - **状態管理**: `pending` → `running` → `succeeded` / `failed` / `canceled`
 - **非同期ワーカー**: goroutine pool による並行処理（同時実行数制限付き）
 - **バックグラウンドポーリング**: 高負荷時や再起動時に未処理の滞留ジョブ（Pending状態）を自動復旧
 - **JSON / NDJSON ストリーム処理**: 行単位読み込みとメモリ最適化で大容量ファイルへ安定対応
 - **リトライ**: 設定可能な最大リトライ回数、失敗時は自動再キュー
+- **手動リトライ**: 永続失敗ジョブを `POST /api/v1/jobs/{id}/retry` で再実行（`retries=0` リセット）
+- **Webhook 通知**: 永続失敗時に `callback_url` へ fire-and-forget で HTTP POST
 - **DLQ (Dead Letter Queue)**: 失敗履歴をテーブルに記録
 - **デタラメではない進捗**: DBへのUPDATE頻度をスロットリングし競合を抑制
 - **冪等性キー**: 同一キーによる重複作成防止
@@ -62,6 +64,7 @@ make up-seed
 | `GET` | `/api/v1/jobs` | ジョブ一覧 (pagination, status filter) |
 | `GET` | `/api/v1/jobs/{id}` | ジョブ詳細 |
 | `POST` | `/api/v1/jobs/{id}/cancel` | ジョブキャンセル |
+| `POST` | `/api/v1/jobs/{id}/retry` | 失敗ジョブの手動再実行 |
 | `GET` | `/api/v1/jobs/{id}/failures` | DLQ 失敗履歴 |
 | `GET` | `/healthz` | ヘルスチェック |
 | `GET` | `/metrics` | Prometheus メトリクス |
@@ -99,15 +102,15 @@ make test-coverage  # カバレッジレポート生成 (coverage.html)
 
 ## Test Coverage
 
-現在のテストカバレッジは **84.5%** です（`cmd/` と `repository/` DB接続部分を除く）。
+主要パッケージの関数カバレッジ（`cmd/` と `repository/` DB接続部分を除く）。
 
 | Package | Coverage |
 |---------|----------|
 | `internal/config` | 100% |
-| `internal/domain` | 100% |
 | `internal/queue` | 100% |
-| `internal/api` | 85.2% |
-| `internal/worker` | 81.0% |
+| `internal/domain` | 80% |
+| `internal/api` ハンドラ群 | 73〜100% |
+| `internal/worker` processor/notifier | 75〜93% |
 
 ## Configuration
 
