@@ -17,14 +17,15 @@ import (
 
 // mockJobRepo for recording state changes during processor execution.
 type mockJobRepo struct {
-	mu            sync.Mutex
-	job           *domain.Job
-	failedEntries []domain.FailedJobEntry
-	updatedStatus string
-	isCompleted   bool
-	finalErrorMsg string
-	retryCount    int
-	pendingJobs   []domain.Job
+	mu                   sync.Mutex
+	job                  *domain.Job
+	failedEntries        []domain.FailedJobEntry
+	updatedStatus        string
+	isCompleted          bool
+	finalErrorMsg        string
+	retryCount           int
+	pendingJobs          []domain.Job
+	markCompletedCtxErr  error // ctx.Err() captured at the moment MarkCompleted is called
 }
 
 func (m *mockJobRepo) Create(ctx context.Context, job *domain.Job) error { return nil }
@@ -51,6 +52,7 @@ func (m *mockJobRepo) UpdateProgress(ctx context.Context, id uuid.UUID, processe
 func (m *mockJobRepo) MarkCompleted(ctx context.Context, id uuid.UUID, status, errorMsg string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.markCompletedCtxErr = ctx.Err() // record whether caller passed a live context
 	m.updatedStatus = status
 	m.isCompleted = true
 	m.finalErrorMsg = errorMsg
@@ -492,6 +494,126 @@ func TestProcessor_ProcessJSON_ScalarRejected(t *testing.T) {
 	}
 }
 
+// controllableMockJobRepo wraps mockJobRepo and fires onRunning() the moment
+// UpdateStatus is called with StatusRunning. This lets tests cancel the parent
+// context *after* GetByID succeeds (reflecting real production behaviour) but
+// *before* the cleanup DB writes, so the cleanupCtx and notifyCtx isolation
+// properties are genuinely exercised.
+type controllableMockJobRepo struct {
+	mockJobRepo
+	onRunning func() // called once when status transitions to StatusRunning
+}
+
+func (m *controllableMockJobRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) (bool, error) {
+	result, err := m.mockJobRepo.UpdateStatus(ctx, id, status)
+	if m.onRunning != nil && status == domain.StatusRunning {
+		m.onRunning()
+	}
+	return result, err
+}
+
+// TestProcessor_CleanupCtxSurvivesParentCancel verifies that the final DB state write
+// (MarkCompleted) is executed even when the parent context is cancelled mid-flight.
+// The parent is cancelled the moment the job transitions to running (after GetByID
+// succeeds), which is the earliest realistic point in production where a shutdown
+// signal can arrive and still reach the cleanup path.
+func TestProcessor_CleanupCtxSurvivesParentCancel(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	jobID := uuid.New()
+	job := &domain.Job{
+		ID:         jobID,
+		Status:     domain.StatusPending,
+		InputURL:   ts.URL,
+		Retries:    3, // already at max so handleFailure → MarkCompleted
+		MaxRetries: 3,
+	}
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	repo := &controllableMockJobRepo{
+		mockJobRepo: mockJobRepo{job: job, retryCount: 3},
+		onRunning:   cancel, // cancel parent the instant running state is persisted
+	}
+
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, &NoopNotifier{})
+	processor.Process(parentCtx, jobID.String(), 1)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+
+	// cleanupCtx (WithoutCancel + WithTimeout) must have shielded the DB write.
+	if !repo.isCompleted {
+		t.Error("expected MarkCompleted to be called even when parent context is cancelled during processing")
+	}
+	if repo.updatedStatus != domain.StatusFailed {
+		t.Errorf("expected status failed, got %s", repo.updatedStatus)
+	}
+	// This is the critical assertion: the context passed to MarkCompleted must not be
+	// cancelled, proving that cleanupCtx (WithoutCancel) was used and not the parent ctx.
+	if repo.markCompletedCtxErr != nil {
+		t.Errorf("expected live context passed to MarkCompleted (WithoutCancel), got ctx.Err()=%v — cleanupCtx isolation broken", repo.markCompletedCtxErr)
+	}
+}
+
+// TestProcessor_NotifyUsesIndependentContext verifies that the context passed to Notify
+// is independent of the parent cancellation and carries a short deadline (~5 s).
+// The parent is cancelled at the running transition (after GetByID) to reach the
+// notify path under realistic shutdown conditions.
+func TestProcessor_NotifyUsesIndependentContext(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	jobID := uuid.New()
+	job := &domain.Job{
+		ID:         jobID,
+		Status:     domain.StatusPending,
+		InputURL:   ts.URL,
+		Retries:    3,
+		MaxRetries: 3,
+	}
+	cn := &contextCapturingNotifier{}
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	repo := &controllableMockJobRepo{
+		mockJobRepo: mockJobRepo{job: job, retryCount: 3},
+		onRunning:   cancel,
+	}
+
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, cn)
+	processor.Process(parentCtx, jobID.String(), 1)
+
+	cn.mu.Lock()
+	gotCtx := cn.captured
+	errAtCall := cn.errAtCall
+	hasDeadline := cn.hasDeadline
+	remaining := cn.remainingAtCall
+	cn.mu.Unlock()
+
+	if gotCtx == nil {
+		t.Fatal("expected Notify to be called, but it was not")
+	}
+	// At the moment Notify was called the context must not have been cancelled
+	// (parent cancel must not propagate into the notify context).
+	if errAtCall != nil {
+		t.Errorf("expected notify context to be active at call time, got: %v", errAtCall)
+	}
+	// The notify context must carry a deadline (~5 s, not inheriting cleanupCtx 30 s).
+	if !hasDeadline {
+		t.Fatal("expected notify context to have a deadline")
+	}
+	if remaining <= 0 {
+		t.Error("notify context deadline had already passed at call time")
+	}
+	if remaining > 5*time.Second {
+		t.Errorf("notify context deadline too far: %v — expected ≤5 s", remaining)
+	}
+}
+
 // spyNotifier records the last job passed to Notify.
 type spyNotifier struct {
 	mu      sync.Mutex
@@ -503,5 +625,30 @@ func (s *spyNotifier) Notify(_ context.Context, job *domain.Job) error {
 	defer s.mu.Unlock()
 	cp := *job
 	s.lastJob = &cp
+	return nil
+}
+
+// contextCapturingNotifier records context state at the moment Notify is called.
+// We capture err and deadline immediately rather than storing the context itself,
+// because the notify context is cancelled by a deferred cancel in handleFailure
+// as soon as the function returns — after which ctx.Err() would always be non-nil.
+type contextCapturingNotifier struct {
+	mu              sync.Mutex
+	captured        context.Context
+	errAtCall       error
+	hasDeadline     bool
+	remainingAtCall time.Duration
+}
+
+func (c *contextCapturingNotifier) Notify(ctx context.Context, _ *domain.Job) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.captured = ctx
+	c.errAtCall = ctx.Err()
+	deadline, ok := ctx.Deadline()
+	c.hasDeadline = ok
+	if ok {
+		c.remainingAtCall = time.Until(deadline)
+	}
 	return nil
 }
