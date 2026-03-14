@@ -119,9 +119,12 @@ func (p *Processor) Process(parentCtx context.Context, jobID string, workerID in
 	duration := time.Since(start)
 	p.metrics.JobDuration.Observe(duration.Seconds())
 
-	// Use a cancel-free context for final state persistence so that a shutdown signal
-	// does not abort the DB writes that record the job's terminal state.
-	cleanupCtx := context.WithoutCancel(ctx)
+	// Use a cancel-free context with a hard timeout for final state persistence.
+	// WithoutCancel ensures a shutdown signal does not abort the DB write.
+	// The explicit timeout prevents an indefinite hang if the DB is unresponsive,
+	// which would block pool.Shutdown() from returning.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cleanupCancel()
 
 	if processErr != nil {
 		p.handleFailure(cleanupCtx, job, processErr, logger)
