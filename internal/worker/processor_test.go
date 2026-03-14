@@ -492,11 +492,30 @@ func TestProcessor_ProcessJSON_ScalarRejected(t *testing.T) {
 	}
 }
 
+// controllableMockJobRepo wraps mockJobRepo and fires onRunning() the moment
+// UpdateStatus is called with StatusRunning. This lets tests cancel the parent
+// context *after* GetByID succeeds (reflecting real production behaviour) but
+// *before* the cleanup DB writes, so the cleanupCtx and notifyCtx isolation
+// properties are genuinely exercised.
+type controllableMockJobRepo struct {
+	mockJobRepo
+	onRunning func() // called once when status transitions to StatusRunning
+}
+
+func (m *controllableMockJobRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) (bool, error) {
+	result, err := m.mockJobRepo.UpdateStatus(ctx, id, status)
+	if m.onRunning != nil && status == domain.StatusRunning {
+		m.onRunning()
+	}
+	return result, err
+}
+
 // TestProcessor_CleanupCtxSurvivesParentCancel verifies that the final DB state write
-// (MarkCompleted) is executed even when the parent context is already cancelled,
-// simulating a shutdown signal arriving during processing.
+// (MarkCompleted) is executed even when the parent context is cancelled mid-flight.
+// The parent is cancelled the moment the job transitions to running (after GetByID
+// succeeds), which is the earliest realistic point in production where a shutdown
+// signal can arrive and still reach the cleanup path.
 func TestProcessor_CleanupCtxSurvivesParentCancel(t *testing.T) {
-	// Server responds so processData can start; the cancelled processCtx will abort the fetch.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -510,21 +529,22 @@ func TestProcessor_CleanupCtxSurvivesParentCancel(t *testing.T) {
 		Retries:    3, // already at max so handleFailure → MarkCompleted
 		MaxRetries: 3,
 	}
-	repo := &mockJobRepo{job: job, retryCount: 3}
 
-	// Simulate shutdown: parent context is cancelled before Process is called.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	parentCtx, cancel := context.WithCancel(context.Background())
+	repo := &controllableMockJobRepo{
+		mockJobRepo: mockJobRepo{job: job, retryCount: 3},
+		onRunning:   cancel, // cancel parent the instant running state is persisted
+	}
 
 	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, &NoopNotifier{})
-	processor.Process(ctx, jobID.String(), 1)
+	processor.Process(parentCtx, jobID.String(), 1)
 
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
 
-	// cleanupCtx must have shielded the DB write from the parent cancellation.
+	// cleanupCtx (WithoutCancel + WithTimeout) must have shielded the DB write.
 	if !repo.isCompleted {
-		t.Error("expected MarkCompleted to be called even with cancelled parent context")
+		t.Error("expected MarkCompleted to be called even when parent context is cancelled during processing")
 	}
 	if repo.updatedStatus != domain.StatusFailed {
 		t.Errorf("expected status failed, got %s", repo.updatedStatus)
@@ -533,6 +553,8 @@ func TestProcessor_CleanupCtxSurvivesParentCancel(t *testing.T) {
 
 // TestProcessor_NotifyUsesIndependentContext verifies that the context passed to Notify
 // is independent of the parent cancellation and carries a short deadline (~5 s).
+// The parent is cancelled at the running transition (after GetByID) to reach the
+// notify path under realistic shutdown conditions.
 func TestProcessor_NotifyUsesIndependentContext(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -547,21 +569,19 @@ func TestProcessor_NotifyUsesIndependentContext(t *testing.T) {
 		Retries:    3,
 		MaxRetries: 3,
 	}
-	repo := &mockJobRepo{job: job, retryCount: 3}
 	cn := &contextCapturingNotifier{}
 
-	// Cancel parent context to simulate shutdown.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	parentCtx, cancel := context.WithCancel(context.Background())
+	repo := &controllableMockJobRepo{
+		mockJobRepo: mockJobRepo{job: job, retryCount: 3},
+		onRunning:   cancel,
+	}
 
 	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, cn)
-	processor.Process(ctx, jobID.String(), 1)
+	processor.Process(parentCtx, jobID.String(), 1)
 
 	cn.mu.Lock()
 	gotCtx := cn.captured
-	cn.mu.Unlock()
-
-	cn.mu.Lock()
 	errAtCall := cn.errAtCall
 	hasDeadline := cn.hasDeadline
 	remaining := cn.remainingAtCall
