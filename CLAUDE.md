@@ -66,7 +66,7 @@ go test -timeout 30s ./internal/...
 - `internal/config`, `queue` → **100%**
 - `internal/domain` → **80%**
 - `internal/api` ハンドラ群 → **73〜100%**（全ハンドラにユニットテストあり）
-- `internal/worker` processor/notifier → **75〜93%**
+- `internal/worker` processor/notifier → **77〜100%**
 - `repository/` は統合テスト（`-tags=integration`）でカバー
 
 ## ディレクトリ構成
