@@ -119,10 +119,14 @@ func (p *Processor) Process(parentCtx context.Context, jobID string, workerID in
 	duration := time.Since(start)
 	p.metrics.JobDuration.Observe(duration.Seconds())
 
+	// Use a cancel-free context for final state persistence so that a shutdown signal
+	// does not abort the DB writes that record the job's terminal state.
+	cleanupCtx := context.WithoutCancel(ctx)
+
 	if processErr != nil {
-		p.handleFailure(ctx, job, processErr, logger)
+		p.handleFailure(cleanupCtx, job, processErr, logger)
 	} else {
-		updated, err := p.repo.MarkCompleted(ctx, id, domain.StatusSucceeded, "")
+		updated, err := p.repo.MarkCompleted(cleanupCtx, id, domain.StatusSucceeded, "")
 		if err != nil {
 			logger.Error("failed to mark job succeeded", "error", err)
 			return
@@ -241,7 +245,35 @@ func (p *Processor) processJSON(ctx context.Context, job *domain.Job, r io.Reade
 
 	delim, isDelim := t.(json.Delim)
 	if !isDelim || delim != '[' {
-		// Single object — count as 1 row
+		// Non-array input — only a single JSON object is accepted.
+		if !isDelim {
+			// Scalar value (number, string, bool, null) — not a valid job payload.
+			return fmt.Errorf("expected JSON object or array, got scalar value")
+		}
+		if delim != '{' {
+			// Unexpected delimiter (e.g. '}', ']').
+			return fmt.Errorf("unexpected token: %v", delim)
+		}
+		// Opening '{' was consumed by Token(); drain remaining tokens to detect broken JSON.
+		depth := 1
+		for depth > 0 {
+			tok, tokErr := decoder.Token()
+			if tokErr != nil {
+				return fmt.Errorf("decode error: %w", tokErr)
+			}
+			if d, ok := tok.(json.Delim); ok {
+				switch d {
+				case '{', '[':
+					depth++
+				case '}', ']':
+					depth--
+				}
+			}
+		}
+		// Reject trailing garbage after the single object.
+		if decoder.More() {
+			return fmt.Errorf("unexpected trailing content after single JSON value")
+		}
 		if err := p.repo.UpdateProgress(ctx, job.ID, 1, 1); err != nil {
 			logger.Warn("failed to update progress", "error", err)
 		}
@@ -342,9 +374,11 @@ func (p *Processor) handleFailure(ctx context.Context, job *domain.Job, processE
 			p.metrics.JobsFailed.Inc()
 			logger.Error("job permanently failed after max retries", "retries", retries)
 			// Notify user (fire-and-forget: log error but don't fail the job transition)
+			now := time.Now().UTC()
 			job.Status = domain.StatusFailed
 			job.ErrorMessage = errMsg
 			job.Retries = retries
+			job.CompletedAt = &now
 			if err := p.notifier.Notify(ctx, job); err != nil {
 				logger.Warn("failed to send failure notification", "job_id", job.ID, "error", err)
 			}

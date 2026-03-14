@@ -409,3 +409,99 @@ func TestProcessor_LargeBatchJSON(t *testing.T) {
 		t.Errorf("expected succeeded, got %s", repo.updatedStatus)
 	}
 }
+
+// TestProcessor_PermanentFailure_WebhookCompletedAt verifies that the webhook payload
+// includes a non-nil CompletedAt when a job is permanently failed (Fix 2).
+func TestProcessor_PermanentFailure_WebhookCompletedAt(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	spy := &spyNotifier{}
+	jobID := uuid.New()
+	job := &domain.Job{
+		ID:         jobID,
+		Status:     domain.StatusPending,
+		InputURL:   ts.URL,
+		Retries:    3,
+		MaxRetries: 3,
+	}
+	repo := &mockJobRepo{job: job, retryCount: 3}
+
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, spy)
+	processor.Process(context.Background(), jobID.String(), 1)
+
+	spy.mu.Lock()
+	notifiedJob := spy.lastJob
+	spy.mu.Unlock()
+
+	if notifiedJob == nil {
+		t.Fatal("expected Notify to be called, but it was not")
+	}
+	if notifiedJob.CompletedAt == nil {
+		t.Error("expected CompletedAt to be set in webhook payload, got nil")
+	}
+}
+
+// TestProcessor_ProcessJSON_BrokenObject verifies that a broken JSON object body
+// is rejected rather than silently counted as 1 row (Fix 3).
+func TestProcessor_ProcessJSON_BrokenObject(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"key": broken}`))
+	}))
+	defer ts.Close()
+
+	jobID := uuid.New()
+	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, Retries: 0, MaxRetries: 1}
+	repo := &mockJobRepo{job: job}
+
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 1, &NoopNotifier{})
+	processor.Process(context.Background(), jobID.String(), 1)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if len(repo.failedEntries) == 0 {
+		t.Error("expected failure entry for broken JSON object")
+	}
+}
+
+// TestProcessor_ProcessJSON_ScalarRejected verifies that a bare scalar is not silently
+// accepted as a 1-row success (Fix 3).
+func TestProcessor_ProcessJSON_ScalarRejected(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`42`))
+	}))
+	defer ts.Close()
+
+	jobID := uuid.New()
+	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, Retries: 0, MaxRetries: 1}
+	repo := &mockJobRepo{job: job}
+
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 1, &NoopNotifier{})
+	processor.Process(context.Background(), jobID.String(), 1)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if repo.updatedStatus == domain.StatusSucceeded {
+		t.Error("expected scalar top-level value to not succeed silently")
+	}
+}
+
+// spyNotifier records the last job passed to Notify.
+type spyNotifier struct {
+	mu      sync.Mutex
+	lastJob *domain.Job
+}
+
+func (s *spyNotifier) Notify(_ context.Context, job *domain.Job) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *job
+	s.lastJob = &cp
+	return nil
+}
