@@ -127,7 +127,7 @@ Intel Core Ultra 7 265 (4コア) / Go 1.22 での計測値。
 | NDJSON     | 約 2.3 秒 | 475 MB/s   | ~14M |
 | JSON array | 約 4.5 秒 | 236 MB/s   | ~14M |
 
-JSON array が NDJSON の約 2 倍遅いのは `json.Decoder` のアーキテクチャ上の制約によるもの。`readValue()` が要素の境界を探すために全バイトを1回スキャンし、続けて `decodeState.skip()` / `object()` が同じバイトをもう1回スキャンする（計2回走査）。NDJSON は `bufio.Scanner` による改行検索（ほぼゼロコスト）と `json.Valid()` による1回のスキャンで完結するため倍速になる。完全な JSON バリデーションを維持する限りこの差は解消できない。
+JSON array が NDJSON の約 2 倍遅い主因は **フォーマットの構造差**（約 81%）。NDJSON は `\n` の1バイト比較で要素境界を検出できるのに対し、JSON array は文字列・エスケープ・括弧深さを追跡するステートマシンが必要なため、境界検出コスト自体が高い。残り約 19% は `json.Decoder` が要素を二重スキャンする実装上のオーバーヘッド（カスタム SM + `json.Valid()` に替えると 233→279 MB/s だが NDJSON には届かない）。
 
 ### API スループット（50並列）
 
