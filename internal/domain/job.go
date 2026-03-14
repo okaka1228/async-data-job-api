@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,7 @@ type Job struct {
 	IdempotencyKey string     `json:"idempotency_key,omitempty"`
 	Status         string     `json:"status"`
 	InputURL       string     `json:"input_url"`
+	CallbackURL    string     `json:"callback_url,omitempty"`
 	TotalRows      int64      `json:"total_rows"`
 	ProcessedRows  int64      `json:"processed_rows"`
 	Retries        int        `json:"retries"`
@@ -37,6 +39,7 @@ type CreateJobRequest struct {
 	InputURL       string `json:"input_url"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	MaxRetries     *int   `json:"max_retries,omitempty"`
+	CallbackURL    string `json:"callback_url,omitempty"`
 }
 
 // Validate validates the create job request.
@@ -52,6 +55,12 @@ func (r *CreateJobRequest) Validate() error {
 	}
 	if r.IdempotencyKey != "" && len(r.IdempotencyKey) > 255 {
 		return errors.New("idempotency_key must be at most 255 characters")
+	}
+	if r.CallbackURL != "" {
+		u, err := url.Parse(r.CallbackURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return errors.New("callback_url must be a valid http or https URL")
+		}
 	}
 	return nil
 }

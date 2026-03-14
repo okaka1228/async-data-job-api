@@ -17,7 +17,7 @@ func TestPool_StartAndShutdown(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	repo := &mockJobRepo{}
 	
-	baseProcessor := NewProcessor(repo, testMetrics, logger, 5*time.Second, 3)
+	baseProcessor := NewProcessor(repo, testMetrics, logger, 5*time.Second, 3, &NoopNotifier{})
 	
 	// Wait, we need to override the actual method if we want polymorphism, but Processor is a struct.
 	// Since Pool takes *Processor directly, we can't easily mock Process without an interface.

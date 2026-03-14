@@ -135,6 +135,22 @@ func (m *mockJobRepo) CancelJob(_ context.Context, id uuid.UUID) (*domain.Job, e
 	return j, nil
 }
 
+func (m *mockJobRepo) RetryJob(_ context.Context, id uuid.UUID) (*domain.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j, ok := m.jobs[id]
+	if !ok {
+		return nil, nil
+	}
+	if j.Status != domain.StatusFailed {
+		return nil, nil
+	}
+	j.Status = domain.StatusPending
+	j.Retries = 0
+	j.ErrorMessage = ""
+	return j, nil
+}
+
 // --- shared test fixtures ---
 
 var (
@@ -516,6 +532,90 @@ func TestListJobs_WithFilter(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rr.Code)
+	}
+}
+
+func TestRetryJob_Success(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	jobID := uuid.New()
+	repo.mu.Lock()
+	repo.jobs[jobID] = &domain.Job{ID: jobID, Status: domain.StatusFailed, InputURL: "test", Retries: 3}
+	repo.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/retry", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusAccepted {
+		t.Errorf("expected 202, got %d. Body: %s", rr.Code, rr.Body.String())
+	}
+
+	repo.mu.Lock()
+	updatedJob := repo.jobs[jobID]
+	repo.mu.Unlock()
+	if updatedJob.Status != domain.StatusPending {
+		t.Errorf("expected status pending after retry, got %s", updatedJob.Status)
+	}
+	if updatedJob.Retries != 0 {
+		t.Errorf("expected retries=0 after retry, got %d", updatedJob.Retries)
+	}
+}
+
+func TestRetryJob_NotFound(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+uuid.New().String()+"/retry", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestRetryJob_NotRetryable(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	jobID := uuid.New()
+	repo.mu.Lock()
+	repo.jobs[jobID] = &domain.Job{ID: jobID, Status: domain.StatusRunning, InputURL: "test"}
+	repo.mu.Unlock()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/retry", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d", rr.Code)
+	}
+}
+
+func TestRetryJob_BadUUID(t *testing.T) {
+	repo := newMockJobRepo()
+	q := queue.NewChannelQueue(10)
+	defer q.Close()
+
+	router := NewRouter(repo, q, testMetrics, testLogger)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/not-a-uuid/retry", nil)
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
 	}
 }
 

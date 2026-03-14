@@ -86,6 +86,10 @@ func (m *mockJobRepo) TouchJob(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
 
+func (m *mockJobRepo) RetryJob(_ context.Context, _ uuid.UUID) (*domain.Job, error) {
+	return nil, nil
+}
+
 var testMetrics = observability.NewMetrics()
 
 func TestProcessor_FailureAndRetry(t *testing.T) {
@@ -107,7 +111,7 @@ func TestProcessor_FailureAndRetry(t *testing.T) {
 
 	repo := &mockJobRepo{job: job}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil)) // use io.Discard in real code, but let's just make it silent
-	processor := NewProcessor(repo, testMetrics, logger, 5*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, logger, 5*time.Second, 3, &NoopNotifier{})
 
 	processor.Process(context.Background(), jobID.String(), 1)
 
@@ -146,7 +150,7 @@ func TestProcessor_PermanentFailure(t *testing.T) {
 
 	repo := &mockJobRepo{job: job, retryCount: 3}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	processor := NewProcessor(repo, testMetrics, logger, 5*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, logger, 5*time.Second, 3, &NoopNotifier{})
 
 	processor.Process(context.Background(), jobID.String(), 1)
 
@@ -192,7 +196,7 @@ func TestProcessor_ProcessJSON_Array(t *testing.T) {
 	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, Retries: 0, MaxRetries: 3}
 	repo := &mockJobRepo{job: job}
 
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()
@@ -217,7 +221,7 @@ func TestProcessor_ProcessNDJSON(t *testing.T) {
 	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, Retries: 0, MaxRetries: 3}
 	repo := &mockJobRepo{job: job}
 
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()
@@ -240,7 +244,7 @@ func TestProcessor_ProcessJSON_SingleObject(t *testing.T) {
 	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, Retries: 0, MaxRetries: 3}
 	repo := &mockJobRepo{job: job}
 
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()
@@ -253,7 +257,7 @@ func TestProcessor_ProcessJSON_SingleObject(t *testing.T) {
 
 func TestProcessor_InvalidJobID(t *testing.T) {
 	repo := &mockJobRepo{}
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, &NoopNotifier{})
 	// Should not panic, just log and return
 	processor.Process(context.Background(), "not-a-uuid", 1)
 }
@@ -263,7 +267,7 @@ func TestProcessor_TerminalStateSkip(t *testing.T) {
 	job := &domain.Job{ID: jobID, Status: domain.StatusSucceeded, InputURL: "http://x", MaxRetries: 3}
 	repo := &mockJobRepo{job: job}
 
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 3, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()
@@ -284,7 +288,7 @@ func TestProcessor_HTTPError(t *testing.T) {
 	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, Retries: 0, MaxRetries: 1}
 	repo := &mockJobRepo{job: job}
 
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 1)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 1, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()
@@ -307,7 +311,7 @@ func TestProcessor_InvalidNDJSON(t *testing.T) {
 	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, Retries: 0, MaxRetries: 1}
 	repo := &mockJobRepo{job: job}
 
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 1)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 5*time.Second, 1, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()
@@ -332,7 +336,7 @@ func TestProcessor_ContextTimeout(t *testing.T) {
 	repo := &mockJobRepo{job: job}
 
 	// Very short timeout
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 100*time.Millisecond, 1)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 100*time.Millisecond, 1, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()
@@ -361,7 +365,7 @@ func TestProcessor_LargeBatchNDJSON(t *testing.T) {
 	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, MaxRetries: 3}
 	repo := &mockJobRepo{job: job}
 
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 10*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 10*time.Second, 3, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()
@@ -395,7 +399,7 @@ func TestProcessor_LargeBatchJSON(t *testing.T) {
 	job := &domain.Job{ID: jobID, Status: domain.StatusPending, InputURL: ts.URL, MaxRetries: 3}
 	repo := &mockJobRepo{job: job}
 
-	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 10*time.Second, 3)
+	processor := NewProcessor(repo, testMetrics, slog.New(slog.NewJSONHandler(io.Discard, nil)), 10*time.Second, 3, &NoopNotifier{})
 	processor.Process(context.Background(), jobID.String(), 1)
 
 	repo.mu.Lock()

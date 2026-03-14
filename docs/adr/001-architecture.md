@@ -27,9 +27,11 @@
 - 同時実行数を環境変数で制御
 - context.WithTimeout でジョブ単位のタイムアウト
 
-### Retry: Inline retry with DLQ
+### Retry: Inline retry with DLQ + Manual retry + Webhook notification
 - 失敗時にリトライカウントをインクリメントし pending に戻す
 - `max_retries` 超過後は `failed` に遷移し `failed_job_entries` テーブルに記録（DLQ）
+- 永続失敗時に `callback_url` へ Webhook を fire-and-forget で送信。`Notifier` インターフェース経由で将来的にキューバック再送へ差し替え可能
+- `POST /api/v1/jobs/{id}/retry` で `failed` ジョブをユーザーが手動再実行可能。`retries=0` にリセットしてフルのリトライバジェットを付与
 
 ### Migration: golang-migrate
 - Docker Compose との統合が容易（専用コンテナで実行）

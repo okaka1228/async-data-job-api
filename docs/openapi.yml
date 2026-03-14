@@ -133,6 +133,32 @@ paths:
         "409":
           description: Job cannot be canceled
 
+  /api/v1/jobs/{id}/retry:
+    post:
+      summary: Retry a failed job
+      operationId: retryJob
+      description: |
+        Reset a `failed` job back to `pending` with `retries=0`, giving it a full retry budget.
+        Returns 409 if the job is not in `failed` state.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: Job queued for retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          description: Not found
+        "409":
+          description: Job is not in failed state
+
   /api/v1/jobs/{id}/failures:
     get:
       summary: List DLQ failure entries for a job
@@ -183,6 +209,11 @@ components:
           type: integer
           minimum: 0
           default: 3
+        callback_url:
+          type: string
+          format: uri
+          description: HTTP/HTTPS URL to POST a webhook payload when the job permanently fails.
+          example: "https://example.com/webhooks/job-failed"
 
     Job:
       type: object
@@ -197,6 +228,10 @@ components:
           enum: [pending, running, succeeded, failed, canceled]
         input_url:
           type: string
+        callback_url:
+          type: string
+          format: uri
+          nullable: true
         total_rows:
           type: integer
         processed_rows:

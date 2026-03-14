@@ -65,6 +65,7 @@ func (h *JobHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		InputURL:       req.InputURL,
 		IdempotencyKey: req.IdempotencyKey,
 		MaxRetries:     maxRetries,
+		CallbackURL:    req.CallbackURL,
 	}
 
 	if err := h.repo.Create(ctx, job); err != nil {
@@ -204,4 +205,48 @@ func (h *JobHandler) GetJobFailures(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"failures": entries,
 	})
+}
+
+// RetryJob handles POST /api/v1/jobs/{id}/retry
+func (h *JobHandler) RetryJob(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		Error(w, http.StatusBadRequest, "invalid job ID", "must be a valid UUID")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Single query: reset to pending only if failed.
+	job, err := h.repo.RetryJob(ctx, id)
+	if err != nil {
+		h.logger.Error("failed to retry job", "error", err)
+		Error(w, http.StatusInternalServerError, "internal error", "")
+		return
+	}
+
+	if job == nil {
+		// Nothing was updated — check why (not found vs. wrong state).
+		existing, err := h.repo.GetByID(ctx, id)
+		if err != nil {
+			h.logger.Error("failed to get job for retry", "error", err)
+			Error(w, http.StatusInternalServerError, "internal error", "")
+			return
+		}
+		if existing == nil {
+			Error(w, http.StatusNotFound, "job not found", "")
+			return
+		}
+		Error(w, http.StatusConflict, "job cannot be retried", "current status: "+existing.Status)
+		return
+	}
+
+	// Re-enqueue. If the queue is full the poller will pick it up.
+	if err := h.queue.Enqueue(ctx, job.ID.String()); err != nil {
+		h.logger.Warn("queue full on retry, poller will pick up job", "job_id", job.ID)
+	}
+
+	h.logger.Info("job queued for retry", "job_id", job.ID)
+	JSON(w, http.StatusAccepted, job)
 }
