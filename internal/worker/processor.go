@@ -376,13 +376,18 @@ func (p *Processor) handleFailure(ctx context.Context, job *domain.Job, processE
 		if updated {
 			p.metrics.JobsFailed.Inc()
 			logger.Error("job permanently failed after max retries", "retries", retries)
-			// Notify user (fire-and-forget: log error but don't fail the job transition)
 			now := time.Now().UTC()
 			job.Status = domain.StatusFailed
 			job.ErrorMessage = errMsg
 			job.Retries = retries
 			job.CompletedAt = &now
-			if err := p.notifier.Notify(ctx, job); err != nil {
+			// Notify with a short independent context so that webhook delivery does not
+			// extend graceful shutdown. cleanupCtx (30 s, no-cancel) is intentionally
+			// not reused here: DB writes need the full budget, but a fire-and-forget
+			// HTTP call should not block pool.Shutdown() for more than a few seconds.
+			notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer notifyCancel()
+			if err := p.notifier.Notify(notifyCtx, job); err != nil {
 				logger.Warn("failed to send failure notification", "job_id", job.ID, "error", err)
 			}
 		}
